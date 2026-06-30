@@ -12,7 +12,7 @@ const execAsync = promisify(exec);
 
 const kafka = new Kafka({
   clientId: 'simulator-admin',
-  brokers: ['localhost:9092']
+  brokers: [process.env.KAFKA_BROKERS || 'localhost:9092']
 });
 const admin = kafka.admin();
 
@@ -166,25 +166,38 @@ app.post('/api/simulate/stop', (req, res) => {
 
 app.post('/api/simulate/clean', async (req, res) => {
     try {
-        addLog('Cleaning SQL Server records...');
+        addLog('Cleaning SQL Server records (Truncating)...');
         const pool = getPool();
         await pool.request().query(`
-            DELETE FROM billing_record;
-            DELETE FROM outbox_events;
-            DELETE FROM cdc_events_shadow;
+            EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'billing_record', @capture_instance = N'dbo_billing_record';
+            TRUNCATE TABLE billing_record;
+            EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'billing_record', @role_name = NULL;
+
+            EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'outbox_events', @capture_instance = N'dbo_outbox_events';
+            TRUNCATE TABLE outbox_events;
+            EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'outbox_events', @role_name = NULL;
+
+            EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'cdc_events_shadow', @capture_instance = N'dbo_cdc_events_shadow';
+            TRUNCATE TABLE cdc_events_shadow;
+            EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'cdc_events_shadow', @role_name = NULL;
         `);
         
-        addLog('Waiting for Debezium to sync deletes...');
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        addLog('Waiting for Debezium to recognize changes...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
         
-        addLog('Wiping Kafka topics...');
-        await admin.deleteTopics({
-            topics: [
-                'sim.sim_db.dbo.billing_record',
-                'sim.sim_db.dbo.outbox_events',
-                'sim.sim_db.dbo.cdc_events_shadow'
-            ]
-        });
+        try {
+            addLog('Wiping Kafka topics...');
+            await admin.deleteTopics({
+                topics: [
+                    'sim.sim_db.dbo.billing_record',
+                    'sim.sim_db.dbo.outbox_events',
+                    'sim.sim_db.dbo.cdc_events_shadow'
+                ]
+            });
+        } catch (e) {
+            console.log('Topic deletion skipped/failed: ', e);
+            addLog('Kafka topics wiped or ignored.');
+        }
         
         globalRecordsPushed = 0;
         baselineKafkaOffset = 0;

@@ -3,7 +3,7 @@ import sql from 'mssql';
 const config: sql.config = {
     user: 'sa',
     password: 'Password123!',
-    server: 'localhost',
+    server: process.env.DB_HOST || 'localhost',
     database: 'sim_db',
     options: {
         encrypt: true,
