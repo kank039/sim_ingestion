@@ -4,11 +4,10 @@ import os from 'os';
 import path from 'path';
 import { Worker } from 'worker_threads';
 import { connectDB, getDBStats, getPool } from './db';
-import { exec } from 'child_process';
+import http from 'http';
 import { promisify } from 'util';
 import { Kafka } from 'kafkajs';
 
-const execAsync = promisify(exec);
 
 const kafka = new Kafka({
   clientId: 'simulator-admin',
@@ -18,12 +17,52 @@ const admin = kafka.admin();
 
 async function getContainerStats() {
     try {
-        const { stdout } = await execAsync('docker stats --no-stream --format "{{.Name}}|{{.CPUPerc}}|{{.MemPerc}}"');
-        const lines = stdout.trim().split('\n');
-        return lines.map(line => {
-            const [name, cpu, mem] = line.split('|');
-            return { name, cpu, mem };
-        }).filter(s => s.name);
+        const containers: any[] = await new Promise((resolve, reject) => {
+            const req = http.request({ socketPath: '/var/run/docker.sock', path: '/containers/json', method: 'GET' }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try { resolve(JSON.parse(data)); } catch(e) { reject(e); }
+                });
+            });
+            req.on('error', reject);
+            req.end();
+        });
+
+        const statsPromises = containers.map(c => new Promise<any>((resolve) => {
+            const req = http.request({ socketPath: '/var/run/docker.sock', path: `/containers/${c.Id}/stats?stream=false`, method: 'GET' }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    try {
+                        const stat = JSON.parse(data);
+                        let cpu = 0;
+                        if (stat.cpu_stats && stat.precpu_stats) {
+                            const cpuDelta = stat.cpu_stats.cpu_usage.total_usage - stat.precpu_stats.cpu_usage.total_usage;
+                            const systemDelta = stat.cpu_stats.system_cpu_usage - stat.precpu_stats.system_cpu_usage;
+                            const cpus = stat.cpu_stats.online_cpus || stat.cpu_stats.cpu_usage.percpu_usage?.length || 1;
+                            if (systemDelta > 0 && cpuDelta > 0) cpu = (cpuDelta / systemDelta) * cpus * 100.0;
+                        }
+                        
+                        let mem = 0;
+                        if (stat.memory_stats && stat.memory_stats.limit) {
+                            mem = (stat.memory_stats.usage / stat.memory_stats.limit) * 100.0;
+                        }
+
+                        resolve({
+                            name: c.Names[0].replace('/', ''),
+                            cpu: cpu.toFixed(2) + '%',
+                            mem: mem.toFixed(2) + '%'
+                        });
+                    } catch(e) { resolve(null); }
+                });
+            });
+            req.on('error', () => resolve(null));
+            req.end();
+        }));
+
+        const results = await Promise.all(statsPromises);
+        return results.filter(r => r !== null);
     } catch (e) {
         console.error("Docker stats error:", e);
         return [];
@@ -41,16 +80,17 @@ let readyWorkers = 0;
 let isRunning = false;
 let currentApproach = 1;
 let currentRps = 10;
-let globalAvgLatency = 0;
+const workerLatencies = new Map<number, number>();
 let globalRecordsPushed = 0;
+let globalRecordsFailed = 0;
 let baselineKafkaOffset = 0;
 
 let gradualInterval: NodeJS.Timeout | null = null;
 
-let systemLogs: { time: string, message: string }[] = [];
-function addLog(message: string) {
-    systemLogs.unshift({ time: new Date().toLocaleTimeString(), message });
-    if (systemLogs.length > 50) systemLogs.pop();
+let systemLogs: { time: string, message: string, level: string, timestamp: number }[] = [];
+function addLog(message: string, level: string = 'info') {
+    systemLogs.unshift({ time: new Date().toLocaleTimeString(), message, level, timestamp: Date.now() });
+    if (systemLogs.length > 500) systemLogs.pop();
 }
 
 // Initialize Workers
@@ -66,9 +106,12 @@ for (let i = 0; i < numWorkers; i++) {
             readyWorkers++;
             console.log(`Worker ${i+1} ready (${readyWorkers}/${numWorkers})`);
         } else if (msg.type === 'stats') {
-            globalAvgLatency = msg.avgLatency;
+            workerLatencies.set(i, msg.avgLatency || 0);
             if (msg.pushed) {
                 globalRecordsPushed += msg.pushed;
+            }
+            if (msg.failed) {
+                globalRecordsFailed += msg.failed;
             }
         }
     });
@@ -99,15 +142,20 @@ app.get('/api/stats', async (req, res) => {
             flawAlert = "RACE CONDITION DETECTED: SMT queried old data for rapid sequential updates.";
         }
         
+        let totalLatency = 0;
+        workerLatencies.forEach(lat => totalLatency += lat);
+        const avgLatency = workerLatencies.size > 0 ? totalLatency / workerLatencies.size : 0;
+        
         res.json({
             isRunning,
             approach: currentApproach,
             rps: currentRps,
-            appLatency: Math.round(globalAvgLatency),
+            appLatency: Math.round(avgLatency),
             flawAlert,
             dbStats,
             containerStats,
             recordsPushed: globalRecordsPushed,
+            recordsFailed: globalRecordsFailed,
             recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
             lag: Math.max(0, globalRecordsPushed - Math.max(0, recordsInKafka - baselineKafkaOffset)),
             logs: systemLogs
@@ -118,7 +166,7 @@ app.get('/api/stats', async (req, res) => {
 });
 
 app.post('/api/simulate/start', (req, res) => {
-    const { approach, rps, gradual, endRps } = req.body;
+    const { approach, rps, gradual, endRps, timeoutMs } = req.body;
     currentApproach = approach;
     currentRps = rps;
     isRunning = true;
@@ -128,7 +176,7 @@ app.post('/api/simulate/start', (req, res) => {
     const updateWorkers = (newRps: number) => {
         const rpsPerWorker = Math.ceil(newRps / numWorkers);
         for (const worker of workers) {
-            worker.postMessage({ type: 'start', approach, rps: rpsPerWorker });
+            worker.postMessage({ type: 'start', approach, rps: rpsPerWorker, timeoutMs });
         }
     };
     
@@ -162,6 +210,68 @@ app.post('/api/simulate/stop', (req, res) => {
         worker.postMessage({ type: 'stop' });
     }
     res.json({ message: 'Simulation stopped' });
+});
+
+let sseClients: express.Response[] = [];
+app.get('/api/stats/stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    
+    sseClients.push(res);
+    req.on('close', () => {
+        sseClients = sseClients.filter(c => c !== res);
+    });
+});
+
+setInterval(async () => {
+    if (sseClients.length === 0) return;
+    try {
+        const [dbStats, containerStats] = await Promise.all([
+            getDBStats(),
+            getContainerStats()
+        ]);
+        
+        let recordsInKafka = 0;
+        try {
+            const offsets = await admin.fetchTopicOffsets('sim.sim_db.dbo.billing_record');
+            recordsInKafka = offsets.reduce((sum, partition) => sum + parseInt(partition.high, 10), 0);
+        } catch(e) {}
+        
+        let flawAlert = null;
+        if (currentApproach === 4 && currentRps > 20) {
+            flawAlert = "RACE CONDITION DETECTED: SMT queried old data for rapid sequential updates.";
+        }
+        
+        let totalLatency = 0;
+        workerLatencies.forEach(lat => totalLatency += lat);
+        const avgLatency = workerLatencies.size > 0 ? totalLatency / workerLatencies.size : 0;
+        
+        const payload = JSON.stringify({
+            isRunning,
+            approach: currentApproach,
+            rps: currentRps,
+            appLatency: Math.round(avgLatency),
+            flawAlert,
+            dbStats,
+            containerStats,
+            recordsPushed: globalRecordsPushed,
+            recordsFailed: globalRecordsFailed,
+            recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
+            lag: Math.max(0, globalRecordsPushed - Math.max(0, recordsInKafka - baselineKafkaOffset)),
+            logs: systemLogs
+        });
+        
+        sseClients.forEach(client => client.write(`data: ${payload}\n\n`));
+    } catch(e) {
+        console.error("SSE Broadcast Error:", e);
+    }
+}, 1000);
+
+app.get('/health', (req, res) => {
+    const pool = getPool();
+    res.json({ status: 'ok', workers: readyWorkers, dbConnected: !!pool?.connected });
 });
 
 app.post('/api/simulate/clean', async (req, res) => {
@@ -200,6 +310,7 @@ app.post('/api/simulate/clean', async (req, res) => {
         }
         
         globalRecordsPushed = 0;
+        globalRecordsFailed = 0;
         baselineKafkaOffset = 0;
         
         // Wait 2 seconds for topics to be deleted, then fetch offsets to set as baseline (in case of recreation)
@@ -245,14 +356,38 @@ app.post('/api/logs/clear', (req, res) => {
 
 const PORT = 3001;
 
+async function connectKafkaAdmin() {
+    try {
+        await admin.connect();
+        console.log('Kafka admin connected');
+    } catch (e) {
+        console.error('Kafka admin connect failed, retrying in 5s...', e);
+        setTimeout(connectKafkaAdmin, 5000);
+    }
+}
+
 async function init() {
     // Connect the main thread to DB just for the DMV stats polling
     await connectDB();
-    await admin.connect();
+    await connectKafkaAdmin();
     
     app.listen(PORT, () => {
         console.log(`Simulator Orchestrator running on port ${PORT}`);
     });
 }
+
+process.on('SIGINT', async () => {
+    console.log('\nShutting down gracefully...');
+    for (const worker of workers) {
+        worker.postMessage({ type: 'stop' });
+        await worker.terminate();
+    }
+    try { await admin.disconnect(); } catch(e) {}
+    const pool = getPool();
+    if (pool) {
+        try { await pool.close(); } catch(e) {}
+    }
+    process.exit(0);
+});
 
 init().catch(console.error);

@@ -1,0 +1,11 @@
+{
+  "name": "sim-dataingestion",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "concurrently \"cd simulator && npm start\" \"cd frontend && npm run dev\"",
+    "postinstall": "npm install concurrently"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -134,6 +134,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - sim_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
       sqlserver:
         condition: service_healthy
