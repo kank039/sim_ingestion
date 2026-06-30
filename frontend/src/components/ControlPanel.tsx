@@ -20,14 +20,16 @@ interface ControlPanelProps {
   timeoutMs: number;
   setTimeoutMs: (v: number) => void;
   isRunning: boolean;
-  isCleaning: boolean;
-  updateSim: (approach: number, rps: number, gradual: boolean, endRps: number, isRunning: boolean, timeoutMs: number) => void;
+  isInsertsOnly: boolean;
+  setIsInsertsOnly: (v: boolean) => void;
+  updateSim: (approach: number, rps: number, gradual: boolean, endRps: number, isRunning: boolean, timeoutMs: number, insertsOnly: boolean) => void;
   handleStartStop: (isRunning: boolean) => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
   approach, setApproach, rps, setRps, isGradual, setIsGradual,
-  endRps, setEndRps, timeoutMs, setTimeoutMs, isRunning, isCleaning, updateSim, handleStartStop
+  endRps, setEndRps, timeoutMs, setTimeoutMs, isRunning, isCleaning, updateSim, handleStartStop,
+  isInsertsOnly, setIsInsertsOnly
 }) => {
   const confirmStop = () => {
     if (isRunning) {
@@ -62,7 +64,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             onChange={(e) => {
               const v = Number(e.target.value);
               setRps(v);
-              updateSim(approach, v, isGradual, endRps, isRunning, timeoutMs);
+              updateSim(approach, v, isGradual, endRps, isRunning, timeoutMs, isInsertsOnly);
             }}
           />
           <span className="slider-val">{rps} {isGradual && 'Start'}</span>
@@ -77,7 +79,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               onChange={(e) => {
                 const v = Number(e.target.value);
                 setEndRps(v);
-                updateSim(approach, rps, isGradual, v, isRunning, timeoutMs);
+                updateSim(approach, rps, isGradual, v, isRunning, timeoutMs, isInsertsOnly);
               }}
             />
             <span className="slider-val">{endRps} Max</span>
@@ -95,11 +97,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             onChange={(e) => {
               const v = Number(e.target.value);
               setTimeoutMs(v);
-              updateSim(approach, rps, isGradual, endRps, isRunning, v);
+              updateSim(approach, rps, isGradual, endRps, isRunning, v, isInsertsOnly);
             }}
           />
           <span className="slider-val">{timeoutMs} ms</span>
         </div>
+      </div>
+
+      <div className="control-group">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', margin: 0, cursor: 'pointer', textTransform: 'none', letterSpacing: 'normal' }}>
+          <input 
+            type="checkbox" 
+            checked={isInsertsOnly} 
+            onChange={e => {
+              setIsInsertsOnly(e.target.checked);
+              updateSim(approach, rps, isGradual, endRps, isRunning, timeoutMs, e.target.checked);
+            }} 
+          /> Inserts Only Mode
+        </label>
       </div>
 
       <div className="control-group">
@@ -111,7 +126,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               className={`approach-btn ${approach === opt.id ? 'active' : ''}`}
               onClick={() => {
                 setApproach(opt.id);
-                updateSim(opt.id, rps, isGradual, endRps, isRunning, timeoutMs);
+                updateSim(opt.id, rps, isGradual, endRps, isRunning, timeoutMs, isInsertsOnly);
               }}
             >
               {opt.name}

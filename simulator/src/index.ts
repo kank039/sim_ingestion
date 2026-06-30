@@ -41,7 +41,7 @@ async function getContainerStats() {
                             const cpuDelta = stat.cpu_stats.cpu_usage.total_usage - stat.precpu_stats.cpu_usage.total_usage;
                             const systemDelta = stat.cpu_stats.system_cpu_usage - stat.precpu_stats.system_cpu_usage;
                             const cpus = stat.cpu_stats.online_cpus || stat.cpu_stats.cpu_usage.percpu_usage?.length || 1;
-                            if (systemDelta > 0 && cpuDelta > 0) cpu = (cpuDelta / systemDelta) * cpus * 100.0;
+                            if (systemDelta > 0 && cpuDelta > 0) cpu = (cpuDelta / systemDelta) * 100.0;
                         }
                         
                         let mem = 0;
@@ -81,7 +81,7 @@ let isRunning = false;
 let currentApproach = 1;
 let currentRps = 10;
 const workerLatencies = new Map<number, number>();
-let globalRecordsPushed = 0;
+let globalRecordsModified = 0;
 let globalRecordsFailed = 0;
 let baselineKafkaOffset = 0;
 
@@ -107,8 +107,8 @@ for (let i = 0; i < numWorkers; i++) {
             console.log(`Worker ${i+1} ready (${readyWorkers}/${numWorkers})`);
         } else if (msg.type === 'stats') {
             workerLatencies.set(i, msg.avgLatency || 0);
-            if (msg.pushed) {
-                globalRecordsPushed += msg.pushed;
+            if (msg.modified) {
+                globalRecordsModified += msg.modified;
             }
             if (msg.failed) {
                 globalRecordsFailed += msg.failed;
@@ -154,10 +154,10 @@ app.get('/api/stats', async (req, res) => {
             flawAlert,
             dbStats,
             containerStats,
-            recordsPushed: globalRecordsPushed,
+            recordsModified: globalRecordsModified,
             recordsFailed: globalRecordsFailed,
             recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
-            lag: Math.max(0, globalRecordsPushed - Math.max(0, recordsInKafka - baselineKafkaOffset)),
+            lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
             logs: systemLogs
         });
     } catch (e) {
@@ -166,7 +166,7 @@ app.get('/api/stats', async (req, res) => {
 });
 
 app.post('/api/simulate/start', (req, res) => {
-    const { approach, rps, gradual, endRps, timeoutMs } = req.body;
+    const { approach, rps, gradual, endRps, timeoutMs, insertsOnly } = req.body;
     currentApproach = approach;
     currentRps = rps;
     isRunning = true;
@@ -176,7 +176,7 @@ app.post('/api/simulate/start', (req, res) => {
     const updateWorkers = (newRps: number) => {
         const rpsPerWorker = Math.ceil(newRps / numWorkers);
         for (const worker of workers) {
-            worker.postMessage({ type: 'start', approach, rps: rpsPerWorker, timeoutMs });
+            worker.postMessage({ type: 'start', approach, rps: rpsPerWorker, timeoutMs, insertsOnly });
         }
     };
     
@@ -256,10 +256,10 @@ setInterval(async () => {
             flawAlert,
             dbStats,
             containerStats,
-            recordsPushed: globalRecordsPushed,
+            recordsModified: globalRecordsModified,
             recordsFailed: globalRecordsFailed,
             recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
-            lag: Math.max(0, globalRecordsPushed - Math.max(0, recordsInKafka - baselineKafkaOffset)),
+            lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
             logs: systemLogs
         });
         

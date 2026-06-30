@@ -11,9 +11,10 @@ let latencyHistory: number[] = new Array(MAX_LATENCY_HISTORY);
 let latencyIndex = 0;
 let latencyCount = 0;
 
-let recordsPushed = 0;
+let recordsModified = 0;
 let recordsFailed = 0;
 let timeoutMs = 3000;
+let isInsertsOnly = false;
 
 // Connect to DB and notify parent
 connectDB().then(() => {
@@ -25,6 +26,7 @@ parentPort?.on('message', (msg) => {
         currentApproach = msg.approach;
         currentRps = msg.rps; // RPS assigned to this specific worker
         timeoutMs = msg.timeoutMs || 3000;
+        isInsertsOnly = !!msg.insertsOnly;
         if (!isRunning) {
             isRunning = true;
             simulationLoop();
@@ -45,13 +47,13 @@ setInterval(() => {
         type: 'stats', 
         avgLatency: avg, 
         count: latencyCount,
-        pushed: recordsPushed,
+        modified: recordsModified,
         failed: recordsFailed
     });
     // Reset for next batch
     latencyIndex = 0;
     latencyCount = 0;
-    recordsPushed = 0;
+    recordsModified = 0;
     recordsFailed = 0;
 }, 1000);
 
@@ -96,7 +98,7 @@ async function simulationLoop() {
                         setTimeout(() => reject(new Error('TIMEOUT')), Math.max(0, timeoutMs - waitTime))
                     );
                     await Promise.race([execPromise, timeoutPromise]);
-                    recordsPushed++;
+                    recordsModified++;
                 } catch (e: any) {
                     if (e.message === 'TIMEOUT') {
                         recordsFailed++;
@@ -122,45 +124,65 @@ async function executeOperation() {
     const operation = Math.random();
 
     try {
-        if (currentApproach === 2) {
-            // Transactional Outbox
-            const transaction = new sql.Transaction(pool);
-            await transaction.begin();
-            const request = new sql.Request(transaction);
-            
-            const payload = JSON.stringify({ batchId, amount, invoiceNumber: `INV-${1000 + batchId}` });
-            
-            if (operation > 0.8) {
-                // Delete
-                await request.query(`
-                    DELETE FROM billing_record WHERE batch_id = ${batchId};
-                    INSERT INTO outbox_events (aggregate_id, payload) VALUES (${batchId}, '${payload}');
-                `);
-            } else if (operation > 0.5) {
-                // Update
-                await request.query(`
-                    UPDATE billing_record SET amount = ${amount} WHERE batch_id = ${batchId};
-                    INSERT INTO outbox_events (aggregate_id, payload) VALUES (${batchId}, '${payload}');
-                `);
+            if (currentApproach === 2) {
+                // Transactional Outbox
+                const transaction = new sql.Transaction(pool);
+                await transaction.begin();
+                const request = new sql.Request(transaction);
+                
+                const payload = JSON.stringify({ batchId, amount, invoiceNumber: `INV-${1000 + batchId}` });
+                
+                if (operation > 0.8 && !isInsertsOnly) {
+                    // Delete
+                    const res = await request.query(`
+                        DELETE TOP (1) FROM billing_record WHERE batch_id = ${batchId};
+                    `);
+                    if (res.rowsAffected[0] === 0) {
+                        await request.query(`
+                            INSERT INTO billing_record (batch_id, amount) VALUES (${batchId}, ${amount});
+                            INSERT INTO outbox_events (aggregate_id, payload) VALUES (${batchId}, '${payload}');
+                        `);
+                    } else {
+                        await request.query(`INSERT INTO outbox_events (aggregate_id, payload) VALUES (${batchId}, '${payload}');`);
+                    }
+                } else if (operation > 0.5 && !isInsertsOnly) {
+                    // Update
+                    const res = await request.query(`
+                        UPDATE TOP (1) billing_record SET amount = ${amount} WHERE batch_id = ${batchId};
+                    `);
+                    if (res.rowsAffected[0] === 0) {
+                        await request.query(`
+                            INSERT INTO billing_record (batch_id, amount) VALUES (${batchId}, ${amount});
+                            INSERT INTO outbox_events (aggregate_id, payload) VALUES (${batchId}, '${payload}');
+                        `);
+                    } else {
+                        await request.query(`INSERT INTO outbox_events (aggregate_id, payload) VALUES (${batchId}, '${payload}');`);
+                    }
+                } else {
+                    // Insert
+                    await request.query(`
+                        INSERT INTO billing_record (batch_id, amount) VALUES (${batchId}, ${amount});
+                        INSERT INTO outbox_events (aggregate_id, payload) VALUES (${batchId}, '${payload}');
+                    `);
+                }
+                
+                await transaction.commit();
             } else {
-                // Insert
-                await request.query(`
-                    INSERT INTO billing_record (batch_id, amount) VALUES (${batchId}, ${amount});
-                    INSERT INTO outbox_events (aggregate_id, payload) VALUES (${batchId}, '${payload}');
-                `);
+                // Triggers / Flink / SMT Approaches
+                if (operation > 0.8 && !isInsertsOnly) {
+                    const res = await pool.request().query(`DELETE TOP (1) FROM billing_record WHERE batch_id = ${batchId}`);
+                    if (res.rowsAffected[0] === 0) {
+                        await pool.request().query(`INSERT INTO billing_record (batch_id, amount) VALUES (${batchId}, ${amount})`);
+                    }
+                } else if (operation > 0.5 && !isInsertsOnly) {
+                    const res = await pool.request().query(`UPDATE TOP (1) billing_record SET amount = ${amount} WHERE batch_id = ${batchId}`);
+                    if (res.rowsAffected[0] === 0) {
+                        await pool.request().query(`INSERT INTO billing_record (batch_id, amount) VALUES (${batchId}, ${amount})`);
+                    }
+                } else {
+                    await pool.request().query(`INSERT INTO billing_record (batch_id, amount) VALUES (${batchId}, ${amount})`);
+                }
             }
-            
-            await transaction.commit();
-        } else {
-            // Triggers / Flink / SMT Approaches
-            if (operation > 0.8) {
-                await pool.request().query(`DELETE FROM billing_record WHERE batch_id = ${batchId}`);
-            } else if (operation > 0.5) {
-                await pool.request().query(`UPDATE billing_record SET amount = ${amount} WHERE batch_id = ${batchId}`);
-            } else {
-                await pool.request().query(`INSERT INTO billing_record (batch_id, amount) VALUES (${batchId}, ${amount})`);
-            }
-        }
     } catch (e) {
         console.error(e);
         throw e;

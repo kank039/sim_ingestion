@@ -9,9 +9,10 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
   const [timeoutMs, setTimeoutMs] = useState(3000);
   const [isGradual, setIsGradual] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
+  const [isInsertsOnly, setIsInsertsOnly] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  const updateSim = useCallback((newApproach: number, newRps: number, gradual: boolean, maxRps: number, isRunning: boolean, newTimeoutMs: number) => {
+  const updateSim = useCallback((newApproach: number, newRps: number, gradual: boolean, maxRps: number, isRunning: boolean, newTimeoutMs: number, insertsOnly: boolean) => {
     if (!isRunning) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     
@@ -20,7 +21,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
         const res = await fetch(`${API_BASE}/simulate/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approach: newApproach, rps: newRps, gradual, endRps: maxRps, timeoutMs: newTimeoutMs })
+          body: JSON.stringify({ approach: newApproach, rps: newRps, gradual, endRps: maxRps, timeoutMs: newTimeoutMs, insertsOnly })
         });
         if (!res.ok) throw new Error(await res.text());
         addActionLog(`Updated simulation (Approach ${newApproach}, RPS ${newRps})`, 'info');
@@ -48,7 +49,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
         const res = await fetch(`${API_BASE}/simulate/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approach, rps, gradual: isGradual, endRps, timeoutMs })
+          body: JSON.stringify({ approach, rps, gradual: isGradual, endRps, timeoutMs, insertsOnly: isInsertsOnly })
         });
         if (!res.ok) throw new Error(await res.text());
         addActionLog('Simulation started successfully.', 'info');
@@ -72,6 +73,8 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     setIsGradual,
     isCleaning,
     updateSim,
-    handleStartStop
+    handleStartStop,
+    isInsertsOnly,
+    setIsInsertsOnly
   };
 }

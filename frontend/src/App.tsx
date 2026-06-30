@@ -29,7 +29,8 @@ function App() {
   const {
     approach, setApproach, rps, setRps, endRps, setEndRps,
     timeoutMs, setTimeoutMs,
-    isGradual, setIsGradual, isCleaning, updateSim, handleStartStop
+    isGradual, setIsGradual, isCleaning, updateSim, handleStartStop,
+    isInsertsOnly, setIsInsertsOnly
   } = useSimulationControl(addActionLog);
 
   const [chartSpeed, setChartSpeed] = useState<'fast' | 'normal' | 'slow'>('normal');
@@ -54,6 +55,21 @@ function App() {
     localStorage.setItem('visibleComponents', JSON.stringify(visibleComponents));
   }, [visibleComponents]);
 
+  const [selectedChartMetrics, setSelectedChartMetrics] = useState<Record<string, boolean>>(() => {
+    const saved = localStorage.getItem('selectedChartMetrics');
+    return saved ? JSON.parse(saved) : {
+      appLatency: true, cpu: true, io: true, recordsModified: false, recordsInKafka: false, lag: false, recordsFailed: false, successRate: false
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('selectedChartMetrics', JSON.stringify(selectedChartMetrics));
+  }, [selectedChartMetrics]);
+
+  const toggleChartMetric = (id: string) => {
+    setSelectedChartMetrics(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
   const toggleComponent = (id: string) => {
     setVisibleComponents(prev => ({ ...prev, [id]: !prev[id] }));
   };
@@ -75,7 +91,7 @@ function App() {
 
   const currentStats = history.length > 0 
     ? history[history.length - 1] 
-    : { time: '', appLatency: 0, cpu: 0, io: 0, recordsPushed: 0, recordsFailed: 0, recordsInKafka: 0, lag: 0 };
+    : { time: '', appLatency: 0, cpu: 0, io: 0, recordsModified: 0, recordsFailed: 0, recordsInKafka: 0, lag: 0 };
 
   const isRunning = stats?.isRunning || false;
   const flawAlert = stats?.flawAlert || null;
@@ -140,6 +156,7 @@ function App() {
               timeoutMs={timeoutMs} setTimeoutMs={setTimeoutMs}
               isGradual={isGradual} setIsGradual={setIsGradual}
               isRunning={isRunning} isCleaning={isCleaning}
+              isInsertsOnly={isInsertsOnly} setIsInsertsOnly={setIsInsertsOnly}
               updateSim={updateSim} handleStartStop={handleStartStop}
             />
             
@@ -195,7 +212,7 @@ function App() {
           <div className="static-dashboard-grid">
             <div className="left-column">
               {visibleComponents['systemHealth'] && (
-                <div className="grid-item-wrapper">
+                <div className="grid-item-wrapper" style={{ flex: 1 }}>
                   <SystemHealth 
                     containerStats={stats?.containerStats || []} 
                     reconnect={reconnect} 
@@ -208,12 +225,21 @@ function App() {
             <div className="right-column">
               {visibleComponents['metrics'] && (
                 <div className="grid-item-wrapper" style={{ flexShrink: 0 }}>
-                  <MetricsGrid currentStats={currentStats} />
+                  <MetricsGrid 
+                    currentStats={currentStats} 
+                    selectedChartMetrics={selectedChartMetrics}
+                    toggleChartMetric={toggleChartMetric}
+                  />
                 </div>
               )}
               {visibleComponents['telemetry'] && (
                 <div className="grid-item-wrapper" style={{ flex: '1 1 400px', minHeight: '400px' }}>
-                  <TelemetryChart history={history} chartSpeed={chartSpeed} setChartSpeed={setChartSpeed} />
+                  <TelemetryChart 
+                    history={history} 
+                    chartSpeed={chartSpeed} 
+                    setChartSpeed={setChartSpeed} 
+                    selectedChartMetrics={selectedChartMetrics}
+                  />
                 </div>
               )}
             </div>

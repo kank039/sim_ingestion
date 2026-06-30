@@ -32,7 +32,7 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
                 appLatency: data.appLatency,
                 cpu: data.dbStats?.cpu || 0,
                 io: data.dbStats?.io || 0,
-                recordsPushed: data.recordsPushed || 0,
+                recordsModified: data.recordsModified || 0,
                 recordsFailed: data.recordsFailed || 0,
                 recordsInKafka: data.recordsInKafka || 0,
                 lag: data.lag || 0

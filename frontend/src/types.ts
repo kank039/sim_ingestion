@@ -9,7 +9,7 @@ export interface TelemetryPoint {
   appLatency: number;
   cpu: number;
   io: number;
-  recordsPushed: number;
+  recordsModified: number;
   recordsFailed: number;
   recordsInKafka: number;
   lag: number;
@@ -30,7 +30,7 @@ export interface SimulationStats {
   flawAlert: string | null;
   dbStats: any; // Or specific shape like { cpu: number, io: number }
   containerStats: ContainerStat[];
-  recordsPushed: number;
+  recordsModified: number;
   recordsFailed: number;
   recordsInKafka: number;
   lag: number;
