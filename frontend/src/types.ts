@@ -1,6 +1,7 @@
 export interface ContainerStat {
   name: string;
   cpu: string;
+  cpuCores?: string[];
   mem: string;
   cacheMem?: string;
 }
@@ -29,6 +30,17 @@ export interface SystemLog {
   timestamp: number;
 }
 
+export interface SubscriberStats {
+  numSubscribers: number;
+  totalMessagesConsumed: number;
+  avgEnrichmentLatency: number;
+  p95EnrichmentLatency: number;
+  p99EnrichmentLatency: number;
+  avgE2eLatency: number;
+  enrichmentsFailed: number;
+  consumerLag: number;
+}
+
 export interface SimulationStats {
   runId?: string;
   elapsedSec?: number;
@@ -48,4 +60,5 @@ export interface SimulationStats {
   lag: number;
   logs?: SystemLog[];
   newLogs?: SystemLog[];
+  subscriberStats?: SubscriberStats;
 }

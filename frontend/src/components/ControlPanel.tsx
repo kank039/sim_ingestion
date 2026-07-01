@@ -27,6 +27,8 @@ interface ControlPanelProps {
   setUpdateWeight: (v: number) => void;
   deleteWeight: number;
   setDeleteWeight: (v: number) => void;
+  numSubscribers: number;
+  setNumSubscribers: (v: number) => void;
   updateSim: (approach: number, rps: number, gradual: boolean, endRps: number, isRunning: boolean, timeoutMs: number, insertsOnly: boolean, card: number, wIns: number, wUpd: number, wDel: number) => void;
   handleStartStop: (isRunning: boolean) => void;
   handlePause: () => void;
@@ -36,7 +38,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   approach, setApproach, rps, setRps, isGradual, setIsGradual,
   endRps, setEndRps, timeoutMs, setTimeoutMs, isRunning, isCleaning, updateSim, handleStartStop,
   isInsertsOnly, setIsInsertsOnly, handlePause,
-  cardinality, setCardinality, insertWeight, setInsertWeight, updateWeight, setUpdateWeight, deleteWeight, setDeleteWeight
+  cardinality, setCardinality, insertWeight, setInsertWeight, updateWeight, setUpdateWeight, deleteWeight, setDeleteWeight,
+  numSubscribers, setNumSubscribers
 }) => {
   const confirmStop = () => {
     if (isRunning) {
@@ -197,6 +200,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           ))}
         </div>
       </div>
+
+      {approach === 5 && (
+        <div className="control-group">
+          <label>Number of Subscribers (Consumer Workers)</label>
+          <div className="slider-container">
+            <input 
+              type="range" min="1" max="100" step="1"
+              aria-label="Number of Subscribers"
+              value={numSubscribers} 
+              onChange={(e) => setNumSubscribers(Number(e.target.value))}
+            />
+            <span className="slider-val">{numSubscribers} workers</span>
+          </div>
+          <div style={{ fontSize: '0.7rem', color: '#999', marginTop: '0.25rem' }}>
+            Each subscriber spins up a Kafka consumer worker that performs non-blocking multi-table JOINs for enrichment.
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <button 

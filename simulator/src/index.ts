@@ -38,11 +38,31 @@ async function getContainerStats() {
                     try {
                         const stat = JSON.parse(data);
                         let cpu = 0;
+                        let cpuCores: string[] = [];
                         if (stat.cpu_stats && stat.precpu_stats) {
                             const cpuDelta = stat.cpu_stats.cpu_usage.total_usage - stat.precpu_stats.cpu_usage.total_usage;
                             const systemDelta = stat.cpu_stats.system_cpu_usage - stat.precpu_stats.system_cpu_usage;
                             const cpus = stat.cpu_stats.online_cpus || stat.cpu_stats.cpu_usage.percpu_usage?.length || 1;
-                            if (systemDelta > 0 && cpuDelta > 0) cpu = (cpuDelta / systemDelta) * 100.0;
+                            if (systemDelta > 0 && cpuDelta > 0) cpu = (cpuDelta / systemDelta) * cpus * 100.0;
+                            
+                            // Determine cpu limit. If not explicitly in stats, fallback to a heuristic or container names.
+                            // In docker-compose, limits are sqlserver:4, kafka:2, debezium:1.5, simulator:2, taskmanager:1.5, jobmanager:1
+                            let limitCpus = 1;
+                            const name = c.Names[0].replace('/', '');
+                            if (name === 'sqlserver') limitCpus = 4;
+                            else if (name === 'kafka' || name === 'simulator') limitCpus = 2;
+                            else if (name === 'debezium' || name === 'flink-taskmanager') limitCpus = 1.5;
+                            else if (name === 'flink-jobmanager') limitCpus = 1;
+                            else limitCpus = Math.ceil(cpu / 100) || 1; // Fallback
+
+                            const numCores = Math.ceil(limitCpus);
+                            let remainingCpu = cpu;
+                            for (let i = 0; i < numCores; i++) {
+                                const maxForThisCore = (i === Math.floor(limitCpus)) ? (limitCpus % 1) * 100 : 100;
+                                const coreUsage = Math.min(remainingCpu, maxForThisCore);
+                                cpuCores.push((coreUsage).toFixed(2) + '%');
+                                remainingCpu = Math.max(0, remainingCpu - coreUsage);
+                            }
                         }
                         
                         let mem = 0;
@@ -64,6 +84,7 @@ async function getContainerStats() {
                         resolve({
                             name: c.Names[0].replace('/', ''),
                             cpu: cpu.toFixed(2) + '%',
+                            cpuCores,
                             mem: mem.toFixed(2) + '%',
                             cacheMem: cacheMem.toFixed(2) + '%'
                         });
@@ -90,6 +111,14 @@ const numWorkers = 4; // Using 4 worker threads
 const workers: Worker[] = [];
 let readyWorkers = 0;
 
+// Approach 5: Consumer worker state
+const consumerWorkers: Worker[] = [];
+let readyConsumers = 0;
+let currentNumSubscribers = 0;
+const consumerLatencies = new Map<number, any>();
+let globalMessagesConsumed = 0;
+let globalEnrichmentsFailed = 0;
+
 let isRunning = false;
 let currentApproach = 1;
 let currentRps = 10;
@@ -104,6 +133,103 @@ let systemLogs: { time: string, message: string, level: string, timestamp: numbe
 function addLog(message: string, level: string = 'info') {
     systemLogs.unshift({ time: new Date().toLocaleTimeString(), message, level, timestamp: Date.now() });
     if (systemLogs.length > 500) systemLogs.pop();
+}
+
+// Helper: Aggregate subscriber stats from consumer workers
+function getSubscriberStats() {
+    if (currentApproach !== 5 || consumerWorkers.length === 0) return undefined;
+    
+    let totalEnrichAvg = 0;
+    let totalEnrichP95 = 0;
+    let totalEnrichP99 = 0;
+    let totalE2eAvg = 0;
+    let count = 0;
+
+    consumerLatencies.forEach((val: any) => {
+        totalEnrichAvg += val.enrichmentAvg || 0;
+        totalEnrichP95 += val.enrichmentP95 || 0;
+        totalEnrichP99 += val.enrichmentP99 || 0;
+        totalE2eAvg += val.e2eAvg || 0;
+        count++;
+    });
+
+    return {
+        numSubscribers: currentNumSubscribers,
+        totalMessagesConsumed: globalMessagesConsumed,
+        avgEnrichmentLatency: count > 0 ? Math.round(totalEnrichAvg / count) : 0,
+        p95EnrichmentLatency: count > 0 ? Math.round(totalEnrichP95 / count) : 0,
+        p99EnrichmentLatency: count > 0 ? Math.round(totalEnrichP99 / count) : 0,
+        avgE2eLatency: count > 0 ? Math.round(totalE2eAvg / count) : 0,
+        enrichmentsFailed: globalEnrichmentsFailed,
+        consumerLag: 0 // TODO: compute from Kafka consumer group lag
+    };
+}
+
+// Helper: Spawn consumer workers for Approach 5
+function spawnConsumerWorkers(numSubscribers: number) {
+    stopConsumerWorkers(); // Clean up any existing
+    currentNumSubscribers = numSubscribers;
+    readyConsumers = 0;
+    globalMessagesConsumed = 0;
+    globalEnrichmentsFailed = 0;
+    consumerLatencies.clear();
+
+    for (let i = 0; i < numSubscribers; i++) {
+        const worker = new Worker(path.join(__dirname, 'consumer-worker.ts'), {
+            execArgv: ['-r', 'ts-node/register'],
+            workerData: { workerId: i }
+        });
+
+        worker.on('message', (msg) => {
+            if (msg.type === 'consumer-ready') {
+                readyConsumers++;
+                addLog(`Consumer worker ${msg.workerId + 1} ready (${readyConsumers}/${numSubscribers})`);
+            } else if (msg.type === 'consumer-stats') {
+                consumerLatencies.set(msg.workerId, {
+                    enrichmentAvg: msg.enrichmentAvg || 0,
+                    enrichmentP95: msg.enrichmentP95 || 0,
+                    enrichmentP99: msg.enrichmentP99 || 0,
+                    e2eAvg: msg.e2eAvg || 0
+                });
+                if (msg.messagesConsumed) {
+                    globalMessagesConsumed += msg.messagesConsumed;
+                }
+                if (msg.enrichmentsFailed) {
+                    globalEnrichmentsFailed += msg.enrichmentsFailed;
+                }
+            } else if (msg.type === 'consumer-error') {
+                addLog(`Consumer worker ${msg.workerId + 1} error: ${msg.error}`, 'error');
+            }
+        });
+
+        worker.on('error', (err) => console.error(`Consumer worker ${i} error:`, err));
+        consumerWorkers.push(worker);
+    }
+
+    // Start all consumer workers
+    for (const cw of consumerWorkers) {
+        cw.postMessage({ type: 'start' });
+    }
+    addLog(`Spawned ${numSubscribers} consumer workers for Approach 5`);
+}
+
+// Helper: Stop and clean up consumer workers
+function stopConsumerWorkers() {
+    for (const cw of consumerWorkers) {
+        try {
+            cw.postMessage({ type: 'stop' });
+        } catch(e) {}
+    }
+    // Terminate after a brief delay to allow cleanup
+    setTimeout(() => {
+        for (const cw of consumerWorkers) {
+            try { cw.terminate(); } catch(e) {}
+        }
+    }, 1000);
+    consumerWorkers.length = 0;
+    consumerLatencies.clear();
+    currentNumSubscribers = 0;
+    readyConsumers = 0;
 }
 
 // Initialize Workers
@@ -188,6 +314,8 @@ app.get('/api/stats', async (req, res) => {
         
         const elapsedSec = isRunning ? Math.floor((Date.now() - runStartTime) / 1000) : 0;
         
+        const subscriberStats = getSubscriberStats();
+        
         res.json({
             runId: currentRunId,
             elapsedSec,
@@ -205,7 +333,8 @@ app.get('/api/stats', async (req, res) => {
             recordsFailed: globalRecordsFailed,
             recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
             lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
-            logs: systemLogs // For GET, return all logs
+            logs: systemLogs, // For GET, return all logs
+            subscriberStats
         });
     } catch (e) {
         res.status(500).json({ error: String(e) });
@@ -213,7 +342,7 @@ app.get('/api/stats', async (req, res) => {
 });
 
 app.post('/api/simulate/start', (req, res) => {
-    const { approach, rps, gradual, endRps, timeoutMs, insertsOnly, cardinality, insertWeight, updateWeight, deleteWeight } = req.body;
+    const { approach, rps, gradual, endRps, timeoutMs, insertsOnly, cardinality, insertWeight, updateWeight, deleteWeight, numSubscribers } = req.body;
     currentApproach = approach;
     currentRps = rps;
     isRunning = true;
@@ -238,7 +367,14 @@ app.post('/api/simulate/start', (req, res) => {
     
     updateWorkers(currentRps);
     
-    addLog(`Simulation started (Approach ${approach}) at ${currentRps} RPS`);
+    // Approach 5: Spawn consumer workers for subscriber enrichment
+    if (approach === 5 && numSubscribers && numSubscribers > 0) {
+        spawnConsumerWorkers(numSubscribers);
+        addLog(`Simulation started (Approach 5: CDC Push + ${numSubscribers} Consumer Workers) at ${currentRps} RPS`);
+    } else {
+        stopConsumerWorkers(); // Clean up if switching away from approach 5
+        addLog(`Simulation started (Approach ${approach}) at ${currentRps} RPS`);
+    }
     
     if (gradual && endRps && endRps > rps) {
         gradualInterval = setInterval(() => {
@@ -265,6 +401,7 @@ app.post('/api/simulate/stop', (req, res) => {
     for (const worker of workers) {
         worker.postMessage({ type: 'stop' });
     }
+    stopConsumerWorkers();
     res.json({ message: 'Simulation stopped' });
 });
 
@@ -339,6 +476,8 @@ setInterval(async () => {
                 client.lastLogTimestamp = newLogs[0].timestamp;
             }
             
+            const subscriberStats = getSubscriberStats();
+            
             const payload = JSON.stringify({
                 runId: currentRunId,
                 elapsedSec,
@@ -356,7 +495,8 @@ setInterval(async () => {
                 recordsFailed: globalRecordsFailed,
                 recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
                 lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
-                newLogs
+                newLogs,
+                subscriberStats
             });
             
             client.res.write(`data: ${payload}\n\n`);
@@ -389,6 +529,14 @@ app.post('/api/simulate/clean', async (req, res) => {
             EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'cdc_events_shadow', @role_name = NULL;
         `);
         
+        // Clean Approach 5 tables (truncate usage, keep reference data)
+        try {
+            await pool.request().query(`TRUNCATE TABLE subscriber_usage;`);
+            addLog('Approach 5 subscriber_usage table truncated.');
+        } catch(e) {
+            // Table might not exist yet
+        }
+        
         addLog('Waiting for Debezium to recognize changes...');
         await new Promise(resolve => setTimeout(resolve, 2000));
         
@@ -408,6 +556,8 @@ app.post('/api/simulate/clean', async (req, res) => {
         
         globalRecordsModified = 0;
         globalRecordsFailed = 0;
+        globalMessagesConsumed = 0;
+        globalEnrichmentsFailed = 0;
         baselineKafkaOffset = 0;
         
         // Wait 2 seconds for topics to be deleted, then fetch offsets to set as baseline (in case of recreation)
@@ -539,6 +689,13 @@ process.on('SIGINT', async () => {
     for (const worker of workers) {
         worker.postMessage({ type: 'stop' });
         await worker.terminate();
+    }
+    // Stop consumer workers
+    for (const cw of consumerWorkers) {
+        try {
+            cw.postMessage({ type: 'stop' });
+            await cw.terminate();
+        } catch(e) {}
     }
     try { await admin.disconnect(); } catch(e) {}
     const pool = getPool();

@@ -1,0 +1,17 @@
+{
+  "name": "approach5-push-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.sqlserver.SqlServerConnector",
+    "tasks.max": "1",
+    "database.hostname": "sqlserver",
+    "database.port": "1433",
+    "database.user": "sa",
+    "database.password": "YourStrong!Passw0rd",
+    "database.names": "sim_db",
+    "topic.prefix": "sim",
+    "table.include.list": "dbo.billing_record",
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:29092",
+    "schema.history.internal.kafka.topic": "schema-changes.push-consumers",
+    "database.encrypt": "false"
+  }
+}

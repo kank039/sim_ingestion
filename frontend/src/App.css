@@ -700,6 +700,25 @@ input[type=range] {
   background: var(--accent-blue);
 }
 
+.health-bar.cpu.core-0 {
+  background: var(--accent-blue);
+}
+
+.health-bar.cpu.core-1 {
+  background: #3b82f6; /* slightly lighter blue */
+  opacity: 0.9;
+}
+
+.health-bar.cpu.core-2 {
+  background: #60a5fa; /* lighter blue */
+  opacity: 0.8;
+}
+
+.health-bar.cpu.core-3 {
+  background: #93c5fd; /* lightest blue */
+  opacity: 0.7;
+}
+
 .health-bar.mem {
   background: var(--accent-red);
 }

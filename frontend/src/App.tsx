@@ -32,7 +32,8 @@ function App() {
     cardinality, setCardinality,
     insertWeight, setInsertWeight,
     updateWeight, setUpdateWeight,
-    deleteWeight, setDeleteWeight
+    deleteWeight, setDeleteWeight,
+    numSubscribers, setNumSubscribers
   } = useSimulationControl(addActionLog);
 
   const [chartSpeed, setChartSpeed] = useState<'fast' | 'normal' | 'slow'>('normal');
@@ -206,6 +207,7 @@ function App() {
               insertWeight={insertWeight} setInsertWeight={setInsertWeight}
               updateWeight={updateWeight} setUpdateWeight={setUpdateWeight}
               deleteWeight={deleteWeight} setDeleteWeight={setDeleteWeight}
+              numSubscribers={numSubscribers} setNumSubscribers={setNumSubscribers}
             />
             
             <div className="sidebar-section-divider"></div>
@@ -253,6 +255,16 @@ function App() {
               <div className="flaw-content">
                 <h3>Flink State Limitation Warning</h3>
                 <p>This approach requires holding `invoice_batch` state in memory (RocksDB). Joins may fail if data arrives out of order or after State TTL expires.</p>
+              </div>
+            </div>
+          )}
+
+          {approach === 5 && (
+            <div className="flaw-alert info">
+              <AlertTriangle size={24} />
+              <div className="flaw-content">
+                <h3>CDC Push + Consumer Enrichment Mode</h3>
+                <p>{numSubscribers} subscriber workers will consume Kafka events and perform non-blocking multi-table JOINs (billing_record → invoice_batch → subscriber_plan → subscriber_usage → rate_schedule) with NOLOCK hints.</p>
               </div>
             </div>
           )}

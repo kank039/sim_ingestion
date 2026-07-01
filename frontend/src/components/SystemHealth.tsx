@@ -40,10 +40,16 @@ export const SystemHealth: React.FC<SystemHealthProps> = ({ containerStats, reco
             <div key={idx} className="health-item">
               <div className="health-name">{stat.name}</div>
               <div className="health-bars">
-                <div className="health-bar-container tooltip-trigger" title={`CPU: ${stat.cpu}`}>
+                <div className="health-bar-container tooltip-trigger" title={`CPU: ${stat.cpu}${stat.cpuCores ? ` | Cores: ${stat.cpuCores.join(', ')}` : ''}`}>
                   <div className="health-label">CPU</div>
                   <div className="health-bar-track">
-                    <div className="health-bar cpu" style={{ width: stat.cpu.replace('%','') + '%' }}></div>
+                    {stat.cpuCores && stat.cpuCores.length > 0 ? (
+                      stat.cpuCores.map((coreUsage, i) => (
+                        <div key={i} className={`health-bar cpu core-${i % 4}`} style={{ width: coreUsage, borderRight: i < stat.cpuCores!.length - 1 && coreUsage !== '0.00%' ? '1px solid rgba(0,0,0,0.2)' : 'none' }}></div>
+                      ))
+                    ) : (
+                      <div className="health-bar cpu" style={{ width: stat.cpu.replace('%','') + '%' }}></div>
+                    )}
                   </div>
                 </div>
                 <div className="health-bar-container tooltip-trigger" title={`MEM: ${stat.mem}${stat.cacheMem ? ` | CACHE: ${stat.cacheMem}` : ''}`}>

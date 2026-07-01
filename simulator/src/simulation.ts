@@ -236,6 +236,12 @@ async function executeOperation(waitTime: number) {
                 req3.input('batchId', sql.Int, batchId);
                 await req3.query(`SELECT invoice_number FROM invoice_batch WHERE id = @batchId`);
             }
+            
+            // Approach 5: CDC Push + Consumer Enrichment
+            // Write-side is identical to default (just billing_record writes).
+            // Debezium CDC captures changes and pushes to Kafka.
+            // Consumer workers (consumer-worker.ts) handle the enrichment via
+            // non-blocking multi-table JOINs on the read side.
         }
     } catch (e) {
         console.error(e);

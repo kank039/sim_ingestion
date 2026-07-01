@@ -28,13 +28,18 @@ export async function connectDB() {
     // Insert some initial data to invoice_batch (ignore errors if other workers are doing it)
     try {
         for (let i = 1; i <= 100; i++) {
+            const planId = ((i - 1) % 100) + 1;
             await pool.request().query(`
                 IF NOT EXISTS (SELECT 1 FROM invoice_batch WHERE id = ${i})
                 BEGIN
-                    INSERT INTO invoice_batch (id, invoice_number) VALUES (${i}, 'INV-${1000 + i}')
+                    INSERT INTO invoice_batch (id, invoice_number, plan_id) VALUES (${i}, 'INV-${1000 + i}', ${planId})
                 END
             `);
         }
+        // Ensure plan_id is set for any existing rows (e.g., from earlier init without plan_id)
+        await pool.request().query(`
+            UPDATE invoice_batch SET plan_id = ((id - 1) % 100) + 1 WHERE plan_id IS NULL
+        `);
     } catch (e) {
         // ignore
     }

@@ -15,6 +15,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
   const [insertWeight, setInsertWeight] = useState(0.5);
   const [updateWeight, setUpdateWeight] = useState(0.3);
   const [deleteWeight, setDeleteWeight] = useState(0.2);
+  const [numSubscribers, setNumSubscribers] = useState(5);
   
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
@@ -27,7 +28,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
         const res = await fetch(`${API_BASE}/simulate/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approach: newApproach, rps: newRps, gradual, endRps: maxRps, timeoutMs: newTimeoutMs, insertsOnly, cardinality: card, insertWeight: wIns, updateWeight: wUpd, deleteWeight: wDel })
+          body: JSON.stringify({ approach: newApproach, rps: newRps, gradual, endRps: maxRps, timeoutMs: newTimeoutMs, insertsOnly, cardinality: card, insertWeight: wIns, updateWeight: wUpd, deleteWeight: wDel, numSubscribers })
         });
         if (!res.ok) throw new Error(await res.text());
         addActionLog(`Updated simulation (Approach ${newApproach}, RPS ${newRps})`, 'info');
@@ -55,7 +56,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
         const res = await fetch(`${API_BASE}/simulate/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approach, rps, gradual: isGradual, endRps, timeoutMs, insertsOnly: isInsertsOnly, cardinality, insertWeight, updateWeight, deleteWeight })
+          body: JSON.stringify({ approach, rps, gradual: isGradual, endRps, timeoutMs, insertsOnly: isInsertsOnly, cardinality, insertWeight, updateWeight, deleteWeight, numSubscribers })
         });
         if (!res.ok) throw new Error(await res.text());
         addActionLog('Simulation started successfully.', 'info');
@@ -89,6 +90,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     cardinality, setCardinality,
     insertWeight, setInsertWeight,
     updateWeight, setUpdateWeight,
-    deleteWeight, setDeleteWeight
+    deleteWeight, setDeleteWeight,
+    numSubscribers, setNumSubscribers
   };
 }
