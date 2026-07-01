@@ -24,12 +24,13 @@ interface ControlPanelProps {
   setIsInsertsOnly: (v: boolean) => void;
   updateSim: (approach: number, rps: number, gradual: boolean, endRps: number, isRunning: boolean, timeoutMs: number, insertsOnly: boolean) => void;
   handleStartStop: (isRunning: boolean) => void;
+  handlePause: () => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
   approach, setApproach, rps, setRps, isGradual, setIsGradual,
   endRps, setEndRps, timeoutMs, setTimeoutMs, isRunning, isCleaning, updateSim, handleStartStop,
-  isInsertsOnly, setIsInsertsOnly
+  isInsertsOnly, setIsInsertsOnly, handlePause
 }) => {
   const confirmStop = () => {
     if (isRunning) {
@@ -135,15 +136,29 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         </div>
       </div>
 
-      <button 
-        className={`action-btn ${isRunning ? 'stop' : 'start'} ${isCleaning ? 'cleaning' : ''}`} 
-        onClick={confirmStop}
-        disabled={isCleaning}
-      >
-        {isCleaning ? <><Settings2 size={16} className="spin" /> CLEANING...</> :
-         isRunning ? <><Square size={16} /> STOP SIMULATION</> : 
-         <><Play size={16} /> START SIMULATION</>}
-      </button>
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <button 
+          className={`action-btn ${isRunning ? 'stop' : 'start'} ${isCleaning ? 'cleaning' : ''}`} 
+          style={{ flex: 1 }}
+          onClick={confirmStop}
+          disabled={isCleaning}
+        >
+          {isCleaning ? <><Settings2 size={16} className="spin" /> CLEANING...</> :
+           isRunning ? <><Square size={16} /> STOP SIMULATION</> : 
+           <><Play size={16} /> START SIMULATION</>}
+        </button>
+
+        {isRunning && (
+          <button 
+            className="action-btn stop"
+            style={{ flex: 1, backgroundColor: '#f59e0b' }} // Orange color for pause
+            onClick={() => handlePause()}
+            disabled={isCleaning}
+          >
+            <Square size={16} /> PAUSE SIMULATION
+          </button>
+        )}
+      </div>
     </div>
   );
 };

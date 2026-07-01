@@ -29,7 +29,7 @@ function App() {
   const {
     approach, setApproach, rps, setRps, endRps, setEndRps,
     timeoutMs, setTimeoutMs,
-    isGradual, setIsGradual, isCleaning, updateSim, handleStartStop,
+    isGradual, setIsGradual, isCleaning, updateSim, handleStartStop, handlePause,
     isInsertsOnly, setIsInsertsOnly
   } = useSimulationControl(addActionLog);
 
@@ -157,7 +157,7 @@ function App() {
               isGradual={isGradual} setIsGradual={setIsGradual}
               isRunning={isRunning} isCleaning={isCleaning}
               isInsertsOnly={isInsertsOnly} setIsInsertsOnly={setIsInsertsOnly}
-              updateSim={updateSim} handleStartStop={handleStartStop}
+              updateSim={updateSim} handleStartStop={handleStartStop} handlePause={handlePause}
             />
             
             <div className="sidebar-section-divider"></div>

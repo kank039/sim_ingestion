@@ -60,6 +60,17 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     }
   };
 
+  const handlePause = async () => {
+    try {
+      addActionLog('Pausing simulation...', 'info');
+      const res = await fetch(`${API_BASE}/simulate/stop`, { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text());
+      addActionLog('Simulation paused successfully.', 'info');
+    } catch (e) {
+      addActionLog(`Pause failed: ${String(e)}`, 'error');
+    }
+  };
+
   return {
     approach,
     setApproach,
@@ -74,6 +85,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     isCleaning,
     updateSim,
     handleStartStop,
+    handlePause,
     isInsertsOnly,
     setIsInsertsOnly
   };
