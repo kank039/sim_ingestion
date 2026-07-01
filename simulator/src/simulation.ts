@@ -3,6 +3,7 @@ import { connectDB, getPool } from './db';
 import sql from 'mssql';
 
 let isRunning = false;
+let isPaused = false;
 let currentApproach = 1;
 let currentRps = 10;
 let timeoutMs = 3000;
@@ -39,10 +40,15 @@ parentPort?.on('message', (msg) => {
         
         if (!isRunning) {
             isRunning = true;
+            isPaused = false;
             simulationLoop();
         }
     } else if (msg.type === 'stop') {
         isRunning = false;
+    } else if (msg.type === 'pause') {
+        isPaused = true;
+    } else if (msg.type === 'resume') {
+        isPaused = false;
     } else if (msg.type === 'reconnect') {
         connectDB().catch(console.error);
     }
@@ -107,6 +113,11 @@ const limit = createLimiter(50);
 
 async function simulationLoop() {
     while (isRunning) {
+        if (isPaused) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+        }
+        
         // Divide RPS into 10 chunks per second
         const batchSize = Math.max(1, Math.floor(currentRps / 10)); 
         

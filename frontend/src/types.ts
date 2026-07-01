@@ -48,6 +48,7 @@ export interface SimulationStats {
   runId?: string;
   elapsedSec?: number;
   isRunning: boolean;
+  isPaused?: boolean;
   approach: number;
   rps: number;
   appLatency: number;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, LayoutDashboard, Check, Download } from 'lucide-react';
+import { AlertTriangle, LayoutDashboard, Check, Download, FileText } from 'lucide-react';
 import './App.css';
 
 import { useSimulationStats } from './hooks/useSimulationStats';
@@ -27,7 +27,7 @@ function App() {
   const {
     approach, setApproach, rps, setRps, endRps, setEndRps,
     timeoutMs, setTimeoutMs,
-    isGradual, setIsGradual, isCleaning, updateSim, handleStartStop, handlePause,
+    isGradual, setIsGradual, isCleaning, updateSim, handleStartStop, handlePause, handleResume,
     isInsertsOnly, setIsInsertsOnly,
     cardinality, setCardinality,
     insertWeight, setInsertWeight,
@@ -47,7 +47,7 @@ function App() {
   const [visibleComponents, setVisibleComponents] = useState<Record<string, boolean>>(() => {
     const saved = localStorage.getItem('visibleComponents');
     return saved ? JSON.parse(saved) : {
-      systemHealth: true, metrics: true, telemetry: true, logs: true,
+      systemHealth: true, metrics: true, telemetry: true,
     };
   });
 
@@ -103,10 +103,12 @@ function App() {
     : { time: '', appLatency: 0, cpu: 0, io: 0, recordsModified: 0, recordsFailed: 0, recordsInKafka: 0, lag: 0 };
 
   const isRunning = stats?.isRunning || false;
+  const isPaused = stats?.isPaused || false;
   const flawAlert = stats?.flawAlert || null;
 
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showLogsModal, setShowLogsModal] = useState(false);
   const [lastRunStats, setLastRunStats] = useState<any>(null);
   const [lastRunHistory, setLastRunHistory] = useState<any[]>([]);
   const prevIsRunning = React.useRef(isRunning);
@@ -166,8 +168,15 @@ function App() {
             )}
           </div>
         </div>
-        
         <div className="header-right">
+          <button 
+            className="icon-btn" 
+            onClick={() => setShowLogsModal(true)} 
+            title="View System Logs"
+            aria-label="View System Logs"
+          >
+            <FileText size={20} />
+          </button>
           <button 
             className="icon-btn" 
             onClick={() => setShowHistoryModal(true)} 
@@ -189,7 +198,7 @@ function App() {
               display: 'inline-block', width: 8, height: 8, borderRadius: '50%', 
               backgroundColor: isConnected ? '#10b981' : '#ef4444', marginRight: 8 
             }}></span>
-            {isRunning ? <span className="live-indicator">LIVE</span> : <span className="paused-indicator">PAUSED</span>}
+            {isRunning ? (isPaused ? <span className="paused-indicator">PAUSED</span> : <span className="live-indicator">LIVE</span>) : <span className="paused-indicator">STOPPED</span>}
           </div>
         </div>
       </header>
@@ -206,9 +215,9 @@ function App() {
               endRps={endRps} setEndRps={setEndRps}
               timeoutMs={timeoutMs} setTimeoutMs={setTimeoutMs}
               isGradual={isGradual} setIsGradual={setIsGradual}
-              isRunning={isRunning} isCleaning={isCleaning}
+              isRunning={isRunning} isCleaning={isCleaning} isPaused={isPaused}
               isInsertsOnly={isInsertsOnly} setIsInsertsOnly={setIsInsertsOnly}
-              updateSim={updateSim} handleStartStop={handleStartStop} handlePause={handlePause}
+              updateSim={updateSim} handleStartStop={handleStartStop} handlePause={handlePause} handleResume={handleResume}
               cardinality={cardinality} setCardinality={setCardinality}
               insertWeight={insertWeight} setInsertWeight={setInsertWeight}
               updateWeight={updateWeight} setUpdateWeight={setUpdateWeight}
@@ -224,7 +233,6 @@ function App() {
                 { id: 'systemHealth', label: 'System Health' },
                 { id: 'metrics', label: 'Metrics Grid' },
                 { id: 'telemetry', label: 'Telemetry Chart' },
-                { id: 'logs', label: 'System Logs' },
               ].map(({id, label}) => (
               <label key={id} className="component-checkbox">
                 <input 
@@ -312,19 +320,22 @@ function App() {
             )}
           </div>
 
-          {visibleComponents['logs'] && (
-            <div className="grid-item-logs">
-              <SystemLogs 
-                logs={[...(stats?.logs || []), ...localLogs].sort((a, b) => b.timestamp - a.timestamp)} 
-                clearLogs={() => {
-                  setLocalLogs([]);
-                  clearLogs();
-                }} 
-              />
-            </div>
-          )}
         </main>
       </div>
+
+      {showLogsModal && (
+        <div className="logs-modal-overlay" onClick={() => setShowLogsModal(false)}>
+          <div className="logs-modal-content" onClick={e => e.stopPropagation()}>
+            <SystemLogs 
+              logs={[...(stats?.logs || []), ...localLogs].sort((a, b) => b.timestamp - a.timestamp)} 
+              clearLogs={() => {
+                setLocalLogs([]);
+                clearLogs();
+              }} 
+            />
+          </div>
+        </div>
+      )}
 
       {showSummaryModal && lastRunStats && (
         <RunSummaryModal 

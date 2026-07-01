@@ -120,6 +120,7 @@ let globalMessagesConsumed = 0;
 let globalEnrichmentsFailed = 0;
 
 let isRunning = false;
+let isPaused = false;
 let currentApproach = 1;
 let currentRps = 10;
 const workerLatencies = new Map<number, any>();
@@ -321,6 +322,7 @@ app.get('/api/stats', async (req, res) => {
             runId: currentRunId,
             elapsedSec,
             isRunning,
+            isPaused,
             approach: currentApproach,
             rps: currentRps,
             appLatency: Math.round(avgLatency),
@@ -348,6 +350,7 @@ app.post('/api/simulate/start', (req, res) => {
     currentApproach = approach;
     currentRps = rps;
     isRunning = true;
+    isPaused = false;
     
     globalRecordsModified = 0;
     globalRecordsFailed = 0;
@@ -398,6 +401,7 @@ app.post('/api/simulate/start', (req, res) => {
 
 app.post('/api/simulate/stop', (req, res) => {
     isRunning = false;
+    isPaused = false;
     addLog(`Simulation stopped`);
     if (gradualInterval) clearInterval(gradualInterval);
     for (const worker of workers) {
@@ -405,6 +409,26 @@ app.post('/api/simulate/stop', (req, res) => {
     }
     stopConsumerWorkers();
     res.json({ message: 'Simulation stopped' });
+});
+
+app.post('/api/simulate/pause', (req, res) => {
+    if (!isRunning) return res.status(400).json({ error: 'Not running' });
+    isPaused = true;
+    addLog(`Simulation paused (workers stopped)`);
+    for (const worker of workers) {
+        worker.postMessage({ type: 'pause' });
+    }
+    res.json({ message: 'Simulation paused' });
+});
+
+app.post('/api/simulate/resume', (req, res) => {
+    if (!isRunning) return res.status(400).json({ error: 'Not running' });
+    isPaused = false;
+    addLog(`Simulation resumed (workers restarted)`);
+    for (const worker of workers) {
+        worker.postMessage({ type: 'resume' });
+    }
+    res.json({ message: 'Simulation resumed' });
 });
 
 let currentRunId = Date.now().toString();
@@ -484,6 +508,7 @@ setInterval(async () => {
                 runId: currentRunId,
                 elapsedSec,
                 isRunning,
+                isPaused,
                 approach: currentApproach,
                 rps: currentRps,
                 appLatency: Math.round(avgLatency),

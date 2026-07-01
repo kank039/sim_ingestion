@@ -70,11 +70,22 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
   const handlePause = async () => {
     try {
       addActionLog('Pausing simulation...', 'info');
-      const res = await fetch(`${API_BASE}/simulate/stop`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/simulate/pause`, { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
       addActionLog('Simulation paused successfully.', 'info');
     } catch (e) {
       addActionLog(`Pause failed: ${String(e)}`, 'error');
+    }
+  };
+
+  const handleResume = async () => {
+    try {
+      addActionLog('Resuming simulation...', 'info');
+      const res = await fetch(`${API_BASE}/simulate/resume`, { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text());
+      addActionLog('Simulation resumed successfully.', 'info');
+    } catch (e) {
+      addActionLog(`Resume failed: ${String(e)}`, 'error');
     }
   };
 
@@ -98,7 +109,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     timeoutMs, setTimeoutMs,
     isGradual, setIsGradual,
     isCleaning,
-    updateSim, handleStartStop, handlePause,
+    updateSim, handleStartStop, handlePause, handleResume,
     isInsertsOnly, setIsInsertsOnly,
     cardinality, setCardinality,
     insertWeight, setInsertWeight,

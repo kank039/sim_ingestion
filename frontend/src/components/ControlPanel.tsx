@@ -16,6 +16,7 @@ interface ControlPanelProps {
   timeoutMs: number;
   setTimeoutMs: (v: number) => void;
   isRunning: boolean;
+  isPaused: boolean;
   isCleaning: boolean;
   isInsertsOnly: boolean;
   setIsInsertsOnly: (v: boolean) => void;
@@ -32,13 +33,14 @@ interface ControlPanelProps {
   updateSim: (approach: number, rps: number, gradual: boolean, endRps: number, isRunning: boolean, timeoutMs: number, insertsOnly: boolean, card: number, wIns: number, wUpd: number, wDel: number) => void;
   handleStartStop: (isRunning: boolean) => void;
   handlePause: () => void;
+  handleResume: () => void;
   handleInduceFailure: () => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
   approach, setApproach, rps, setRps, isGradual, setIsGradual,
-  endRps, setEndRps, timeoutMs, setTimeoutMs, isRunning, isCleaning, updateSim, handleStartStop,
-  isInsertsOnly, setIsInsertsOnly, handlePause, handleInduceFailure,
+  endRps, setEndRps, timeoutMs, setTimeoutMs, isRunning, isPaused, isCleaning, updateSim, handleStartStop,
+  isInsertsOnly, setIsInsertsOnly, handlePause, handleResume, handleInduceFailure,
   cardinality, setCardinality, insertWeight, setInsertWeight, updateWeight, setUpdateWeight, deleteWeight, setDeleteWeight,
   numSubscribers, setNumSubscribers
 }) => {
@@ -235,11 +237,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         {isRunning && (
           <button 
             className="action-btn stop"
-            style={{ flex: 1, backgroundColor: '#f59e0b' }} // Orange color for pause
-            onClick={() => handlePause()}
+            style={{ flex: 1, backgroundColor: isPaused ? '#10b981' : '#f59e0b' }}
+            onClick={() => isPaused ? handleResume() : handlePause()}
             disabled={isCleaning}
           >
-            <Square size={16} /> PAUSE SIMULATION
+            {isPaused ? <><Play size={16} /> RESUME SIMULATION</> : <><Square size={16} /> PAUSE SIMULATION</>}
           </button>
         )}
       </div>

@@ -284,7 +284,7 @@ body {
 /* Responsive Dashboard Grid */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 1fr 350px;
+  grid-template-columns: 1fr auto;
   gap: 0.75rem;
   padding: 0.75rem;
   flex: 1;
@@ -313,6 +313,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  width: 350px;
 }
 
 .grid-item-telemetry {
@@ -818,4 +819,33 @@ input[type=range] {
 .log-line.empty {
   color: #64748b;
   font-style: italic;
+}
+
+.logs-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.logs-modal-content {
+  width: 80%;
+  max-width: 900px;
+  height: 80%;
+  display: flex;
+  flex-direction: column;
+}
+
+.logs-modal-content .logs-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
 }
