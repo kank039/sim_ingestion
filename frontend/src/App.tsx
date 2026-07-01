@@ -33,7 +33,8 @@ function App() {
     insertWeight, setInsertWeight,
     updateWeight, setUpdateWeight,
     deleteWeight, setDeleteWeight,
-    numSubscribers, setNumSubscribers
+    numSubscribers, setNumSubscribers,
+    handleInduceFailure
   } = useSimulationControl(addActionLog);
 
   const [chartSpeed, setChartSpeed] = useState<'fast' | 'normal' | 'slow'>('normal');
@@ -208,6 +209,7 @@ function App() {
               updateWeight={updateWeight} setUpdateWeight={setUpdateWeight}
               deleteWeight={deleteWeight} setDeleteWeight={setDeleteWeight}
               numSubscribers={numSubscribers} setNumSubscribers={setNumSubscribers}
+              handleInduceFailure={handleInduceFailure}
             />
             
             <div className="sidebar-section-divider"></div>
@@ -274,7 +276,8 @@ function App() {
               {visibleComponents['systemHealth'] && (
                 <div className="grid-item-wrapper" style={{ flex: 1 }}>
                   <SystemHealth 
-                    containerStats={stats?.containerStats || []} 
+                    containerStats={stats?.containerStats || []}
+                    dbStats={stats?.dbStats}
                     reconnect={reconnect} 
                     isConnected={isConnected} 
                   />

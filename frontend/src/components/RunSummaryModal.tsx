@@ -12,6 +12,10 @@ interface RunSummaryModalProps {
 export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history, onClose, onSave }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [verifyOrdering, setVerifyOrdering] = useState(false);
+  const [verifyDuplicates, setVerifyDuplicates] = useState(false);
+  const [verificationResult, setVerificationResult] = useState<any>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   const totalRecords = (stats?.recordsModified || 0) + (stats?.recordsFailed || 0);
   const successRate = totalRecords > 0 
@@ -44,6 +48,21 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
       alert('Failed to save run');
     }
     setIsSaving(false);
+  };
+
+  const handleVerify = async () => {
+    setIsVerifying(true);
+    setVerificationResult(null);
+    try {
+      const res = await fetch('http://localhost:3001/api/simulate/verify', { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setVerificationResult(data);
+    } catch (e) {
+      console.error(e);
+      alert('Verification failed');
+    }
+    setIsVerifying(false);
   };
 
   return (
@@ -91,6 +110,54 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
             <div style={{ color: '#aaa', fontSize: '0.85rem' }}>p99 Latency</div>
             <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{stats?.p99 || 0} ms</div>
           </div>
+        </div>
+
+        <div style={{ margin: '1rem 0', padding: '1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
+          <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem' }}>Verification Checks</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={verifyOrdering} onChange={e => setVerifyOrdering(e.target.checked)} />
+              Verify Message Ordering (Strictly Monotonic)
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+              <input type="checkbox" checked={verifyDuplicates} onChange={e => setVerifyDuplicates(e.target.checked)} />
+              Verify Delivery Semantics (Check for Duplicates)
+            </label>
+          </div>
+          <button 
+            onClick={handleVerify}
+            disabled={isVerifying || (!verifyOrdering && !verifyDuplicates)}
+            style={{ 
+              padding: '0.5rem 1rem', 
+              background: 'var(--accent-blue)', 
+              color: '#fff', border: 'none', borderRadius: '4px', cursor: (isVerifying || (!verifyOrdering && !verifyDuplicates)) ? 'not-allowed' : 'pointer',
+              opacity: (isVerifying || (!verifyOrdering && !verifyDuplicates)) ? 0.5 : 1
+            }}
+          >
+            {isVerifying ? 'Running Verification...' : 'Run Verification'}
+          </button>
+
+          {verificationResult && (
+            <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '4px', fontSize: '0.9rem' }}>
+              <div style={{ marginBottom: '0.5rem' }}><strong>Messages Checked:</strong> {verificationResult.messagesChecked.toLocaleString()}</div>
+              {verifyOrdering && (
+                <div>
+                  <strong>Ordering:</strong>{' '}
+                  <span style={{ color: verificationResult.ordered ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                    {verificationResult.ordered ? 'Strictly Monotonic (Passed)' : 'Out of Order (Failed)'}
+                  </span>
+                </div>
+              )}
+              {verifyDuplicates && (
+                <div style={{ marginTop: '0.25rem' }}>
+                  <strong>Duplicates:</strong>{' '}
+                  <span style={{ color: verificationResult.duplicates === 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                    {verificationResult.duplicates === 0 ? '0 (Exactly-Once Passed)' : `${verificationResult.duplicates} (At-Least-Once / Failed)`}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>

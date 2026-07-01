@@ -126,6 +126,7 @@ const workerLatencies = new Map<number, any>();
 let globalRecordsModified = 0;
 let globalRecordsFailed = 0;
 let baselineKafkaOffset = 0;
+let globalCaptureLagMs = 0;
 
 let gradualInterval: NodeJS.Timeout | null = null;
 
@@ -333,6 +334,7 @@ app.get('/api/stats', async (req, res) => {
             recordsFailed: globalRecordsFailed,
             recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
             lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
+            captureLagMs: globalCaptureLagMs,
             logs: systemLogs, // For GET, return all logs
             subscriberStats
         });
@@ -495,6 +497,7 @@ setInterval(async () => {
                 recordsFailed: globalRecordsFailed,
                 recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
                 lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
+                captureLagMs: globalCaptureLagMs,
                 newLogs,
                 subscriberStats
             });
@@ -596,6 +599,107 @@ app.post('/api/system/reconnect', async (req, res) => {
     }
 });
 
+app.post('/api/system/induce-failure', async (req, res) => {
+    try {
+        addLog('Inducing hard failure (Restarting Debezium container)...', 'error');
+        const containers: any[] = await new Promise((resolve, reject) => {
+            const req = http.request({ socketPath: '/var/run/docker.sock', path: '/containers/json', method: 'GET' }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve(JSON.parse(data)));
+            });
+            req.on('error', reject);
+            req.end();
+        });
+        const deb = containers.find(c => c.Names[0].includes('debezium'));
+        if (deb) {
+            await new Promise((resolve, reject) => {
+                const req = http.request({ socketPath: '/var/run/docker.sock', path: `/containers/${deb.Id}/restart`, method: 'POST' }, (res) => {
+                    resolve(true);
+                });
+                req.on('error', reject);
+                req.end();
+            });
+            addLog('Debezium container restarted successfully.', 'info');
+            res.json({ message: 'Hard failure induced' });
+        } else {
+            addLog('Debezium container not found', 'error');
+            res.status(404).json({ error: 'Debezium container not found' });
+        }
+    } catch(e) {
+        addLog('Failed to induce failure: ' + String(e), 'error');
+        res.status(500).json({ error: String(e) });
+    }
+});
+
+app.post('/api/simulate/verify', async (req, res) => {
+    try {
+        addLog('Starting verification checks...', 'info');
+        const verifyConsumer = kafka.consumer({ groupId: 'verify-group-' + Date.now() });
+        await verifyConsumer.connect();
+        await verifyConsumer.subscribe({ topic: 'sim.sim_db.dbo.billing_record', fromBeginning: true });
+
+        const duplicateCheck = new Map<number, number>();
+        let lastId = -1;
+        let isStrictlyMonotonic = true;
+        let recordsProcessed = 0;
+        let baselineOffsetNum = baselineKafkaOffset;
+
+        const offsets = await admin.fetchTopicOffsets('sim.sim_db.dbo.billing_record');
+        const targetHighOffset = parseInt(offsets[0].high, 10);
+        
+        let promiseResolve: any;
+        const consumePromise = new Promise(resolve => promiseResolve = resolve);
+
+        if (targetHighOffset === 0 || targetHighOffset <= baselineOffsetNum) {
+            await verifyConsumer.disconnect();
+            return res.json({ ordered: true, duplicates: 0, messagesChecked: 0 });
+        }
+
+        await verifyConsumer.run({
+            eachMessage: async ({ message, partition }) => {
+                const offset = parseInt(message.offset, 10);
+                if (offset >= baselineOffsetNum) {
+                    try {
+                        const val = JSON.parse(message.value?.toString() || '{}');
+                        const id = val.payload?.after?.id || val.payload?.id;
+                        if (id !== undefined) {
+                            duplicateCheck.set(id, (duplicateCheck.get(id) || 0) + 1);
+                            if (lastId !== -1 && id <= lastId) {
+                                isStrictlyMonotonic = false;
+                            }
+                            lastId = id;
+                            recordsProcessed++;
+                        }
+                    } catch(e) {}
+                }
+                if (offset >= targetHighOffset - 1) {
+                    promiseResolve();
+                }
+            }
+        });
+
+        setTimeout(() => { promiseResolve(); }, 10000);
+        await consumePromise;
+        await verifyConsumer.disconnect();
+
+        let duplicatesCount = 0;
+        for (const [id, count] of duplicateCheck.entries()) {
+            if (count > 1) duplicatesCount++;
+        }
+
+        addLog(`Verification complete. Checked ${recordsProcessed} records. Duplicates: ${duplicatesCount}. Monotonic: ${isStrictlyMonotonic}`);
+        res.json({
+            ordered: isStrictlyMonotonic,
+            duplicates: duplicatesCount,
+            messagesChecked: recordsProcessed
+        });
+    } catch(e) {
+        addLog('Verification error: ' + String(e), 'error');
+        res.status(500).json({ error: String(e) });
+    }
+});
+
 const RESULTS_DIR = path.join(__dirname, '../../docs/results');
 
 app.post('/api/simulate/save-run', async (req, res) => {
@@ -674,10 +778,38 @@ async function connectKafkaAdmin() {
     }
 }
 
+const lagConsumer = kafka.consumer({ groupId: 'lag-tracker-group-' + Date.now() });
+async function startLagTracker() {
+    try {
+        await lagConsumer.connect();
+        // The topic might not exist initially, so we just attempt to subscribe
+        try {
+            await lagConsumer.subscribe({ topic: 'sim.sim_db.dbo.billing_record', fromBeginning: false });
+        } catch(e) {}
+        
+        await lagConsumer.run({
+            eachMessage: async ({ message }) => {
+                try {
+                    const now = Date.now();
+                    const value = JSON.parse(message.value?.toString() || '{}');
+                    if (value.payload && value.payload.source && value.payload.source.ts_ms) {
+                        const ts_ms = value.payload.source.ts_ms;
+                        globalCaptureLagMs = now - ts_ms;
+                    }
+                } catch(e) {}
+            }
+        });
+    } catch (e) {
+        console.error("Lag tracker error", e);
+        setTimeout(startLagTracker, 5000);
+    }
+}
+
 async function init() {
     // Connect the main thread to DB just for the DMV stats polling
     await connectDB();
     await connectKafkaAdmin();
+    startLagTracker();
     
     app.listen(PORT, () => {
         console.log(`Simulator Orchestrator running on port ${PORT}`);

@@ -20,6 +20,7 @@ export interface TelemetryPoint {
   recordsFailed: number;
   recordsInKafka: number;
   lag: number;
+  captureLagMs?: number;
   actualRps?: number;
   consumerE2eLatency?: number;
   consumerEnrichmentLatency?: number;
@@ -54,12 +55,13 @@ export interface SimulationStats {
   p95?: number;
   p99?: number;
   flawAlert: string | null;
-  dbStats: { cpu: number; io: number; wait_tasks?: number; active_locks?: number };
+  dbStats: { cpu: number; io: number; wait_tasks?: number; active_locks?: number; ldfSizeMB?: number; ple?: number; tempDbMB?: number; activeConnections?: number };
   containerStats: ContainerStat[];
   recordsModified: number;
   recordsFailed: number;
   recordsInKafka: number;
   lag: number;
+  captureLagMs?: number;
   logs?: SystemLog[];
   newLogs?: SystemLog[];
   subscriberStats?: SubscriberStats;

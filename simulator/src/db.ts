@@ -78,6 +78,10 @@ export async function getDBStats() {
         
         const waitRes = await pool.request().query(`SELECT count(*) as WaitTasks FROM sys.dm_os_waiting_tasks WHERE session_id > 50;`);
         const lockRes = await pool.request().query(`SELECT count(*) as ActiveLocks FROM sys.dm_tran_locks WHERE request_session_id > 50 AND request_mode IN ('X', 'U', 'IX');`);
+        const ldfRes = await pool.request().query(`SELECT (used_log_space_in_bytes / 1024.0 / 1024.0) as LdfSizeMB FROM sys.dm_db_log_space_usage;`);
+        const pleRes = await pool.request().query(`SELECT cntr_value as PLE FROM sys.dm_os_performance_counters WHERE counter_name = 'Page life expectancy' AND object_name LIKE '%Buffer Manager%';`);
+        const tempdbRes = await pool.request().query(`SELECT SUM(unallocated_extent_page_count + version_store_reserved_page_count + user_object_reserved_page_count + internal_object_reserved_page_count + mixed_extent_page_count) * 8.0 / 1024.0 as TempDbMB FROM tempdb.sys.dm_db_file_space_usage;`);
+        const connRes = await pool.request().query(`SELECT count(*) as ActiveConnections FROM sys.dm_exec_sessions WHERE database_id = DB_ID('sim_db') AND session_id > 50;`);
 
         const currentIOMB = ioRes.recordset[0]?.TotalIOMB || 0;
         const now = Date.now();
@@ -97,10 +101,14 @@ export async function getDBStats() {
             cpu: cpuRes.recordset[0]?.SQLProcessUtilization || 0,
             io: Math.round(deltaMB * 100) / 100, // rounded to 2 decimals
             wait_tasks: waitRes.recordset[0]?.WaitTasks || 0,
-            active_locks: lockRes.recordset[0]?.ActiveLocks || 0
+            active_locks: lockRes.recordset[0]?.ActiveLocks || 0,
+            ldfSizeMB: Math.round((ldfRes.recordset[0]?.LdfSizeMB || 0) * 100) / 100,
+            ple: pleRes.recordset[0]?.PLE || 0,
+            tempDbMB: Math.round((tempdbRes.recordset[0]?.TempDbMB || 0) * 100) / 100,
+            activeConnections: connRes.recordset[0]?.ActiveConnections || 0
         };
     } catch (e) {
         console.error("Failed to get DB stats", e);
-        return { cpu: 0, io: 0, wait_tasks: 0, active_locks: 0 };
+        return { cpu: 0, io: 0, wait_tasks: 0, active_locks: 0, ldfSizeMB: 0, ple: 0, tempDbMB: 0, activeConnections: 0 };
     }
 }

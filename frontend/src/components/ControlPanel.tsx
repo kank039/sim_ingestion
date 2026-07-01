@@ -1,5 +1,5 @@
 import React from 'react';
-import { Settings2, Play, Square } from 'lucide-react';
+import { Settings2, Play, Square, AlertTriangle } from 'lucide-react';
 import { APPROACHES } from '../constants';
 
 
@@ -32,12 +32,13 @@ interface ControlPanelProps {
   updateSim: (approach: number, rps: number, gradual: boolean, endRps: number, isRunning: boolean, timeoutMs: number, insertsOnly: boolean, card: number, wIns: number, wUpd: number, wDel: number) => void;
   handleStartStop: (isRunning: boolean) => void;
   handlePause: () => void;
+  handleInduceFailure: () => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
   approach, setApproach, rps, setRps, isGradual, setIsGradual,
   endRps, setEndRps, timeoutMs, setTimeoutMs, isRunning, isCleaning, updateSim, handleStartStop,
-  isInsertsOnly, setIsInsertsOnly, handlePause,
+  isInsertsOnly, setIsInsertsOnly, handlePause, handleInduceFailure,
   cardinality, setCardinality, insertWeight, setInsertWeight, updateWeight, setUpdateWeight, deleteWeight, setDeleteWeight,
   numSubscribers, setNumSubscribers
 }) => {
@@ -241,6 +242,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             <Square size={16} /> PAUSE SIMULATION
           </button>
         )}
+      </div>
+
+      <div style={{ marginTop: '0.5rem' }}>
+        <button
+          className="action-btn"
+          style={{ width: '100%', backgroundColor: 'var(--accent-red)', border: '1px solid #7f1d1d' }}
+          onClick={handleInduceFailure}
+          disabled={!isRunning || isCleaning || ![1,3,5].includes(approach)}
+        >
+          <AlertTriangle size={16} /> INDUCE HARD FAILURE (CDC)
+        </button>
       </div>
     </div>
   );

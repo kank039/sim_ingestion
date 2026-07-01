@@ -78,6 +78,19 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     }
   };
 
+  const handleInduceFailure = async () => {
+    if (window.confirm("Are you sure you want to forcefully restart the Debezium container to simulate a failure?")) {
+      try {
+        addActionLog('Inducing hard failure...', 'error');
+        const res = await fetch(`${API_BASE}/system/induce-failure`, { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        addActionLog('Hard failure induced.', 'info');
+      } catch (e) {
+        addActionLog(`Failure induction failed: ${String(e)}`, 'error');
+      }
+    }
+  };
+
   return {
     approach, setApproach,
     rps, setRps,
@@ -91,6 +104,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     insertWeight, setInsertWeight,
     updateWeight, setUpdateWeight,
     deleteWeight, setDeleteWeight,
-    numSubscribers, setNumSubscribers
+    numSubscribers, setNumSubscribers,
+    handleInduceFailure
   };
 }

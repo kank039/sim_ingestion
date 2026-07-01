@@ -4,11 +4,12 @@ import type { ContainerStat } from '../types';
 
 interface SystemHealthProps {
   containerStats: ContainerStat[];
+  dbStats?: any;
   reconnect: () => void;
   isConnected: boolean;
 }
 
-export const SystemHealth: React.FC<SystemHealthProps> = ({ containerStats, reconnect, isConnected }) => {
+export const SystemHealth: React.FC<SystemHealthProps> = ({ containerStats, dbStats, reconnect, isConnected }) => {
   return (
     <div className="glass-panel grid-item-content">
       <div className="panel-header" style={{marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
@@ -69,6 +70,30 @@ export const SystemHealth: React.FC<SystemHealthProps> = ({ containerStats, reco
         <div style={{ color: 'var(--accent-red)', fontSize: '0.85rem', textAlign: 'center', padding: '1rem', fontStyle: 'italic', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
           <AlertTriangle size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }}/>
           Containers Disconnected
+        </div>
+      )}
+
+      {dbStats && (
+        <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '0.5rem' }}>
+          <div style={{ fontSize: '0.85rem', color: '#aaa', marginBottom: '0.5rem' }}>Database Engine Health</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+            <div className="health-item" style={{ flexDirection: 'column', alignItems: 'flex-start', padding: '4px 8px' }}>
+              <div className="health-name" style={{ fontSize: '0.7rem', opacity: 0.8 }}>LDF SIZE</div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>{dbStats.ldfSizeMB} MB</div>
+            </div>
+            <div className="health-item" style={{ flexDirection: 'column', alignItems: 'flex-start', padding: '4px 8px' }}>
+              <div className="health-name" style={{ fontSize: '0.7rem', opacity: 0.8 }}>CACHE PLE</div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>{dbStats.ple} s</div>
+            </div>
+            <div className="health-item" style={{ flexDirection: 'column', alignItems: 'flex-start', padding: '4px 8px' }}>
+              <div className="health-name" style={{ fontSize: '0.7rem', opacity: 0.8 }}>TEMPDB</div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>{dbStats.tempDbMB} MB</div>
+            </div>
+            <div className="health-item" style={{ flexDirection: 'column', alignItems: 'flex-start', padding: '4px 8px' }}>
+              <div className="health-name" style={{ fontSize: '0.7rem', opacity: 0.8 }}>CONNECTIONS</div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>{dbStats.activeConnections}</div>
+            </div>
+          </div>
         </div>
       )}
     </div>
