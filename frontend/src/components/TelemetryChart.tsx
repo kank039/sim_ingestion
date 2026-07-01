@@ -38,8 +38,12 @@ const TelemetryChart: React.FC<TelemetryChartProps> = ({ history, chartSpeed, se
             <Tooltip contentStyle={{ backgroundColor: '#111', border: '1px solid #333' }} />
             <Legend />
             {(!selectedChartMetrics || selectedChartMetrics['appLatency']) && <Line type="monotone" dataKey="appLatency" name="App Latency (ms)" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />}
+            {selectedChartMetrics && selectedChartMetrics['actualRps'] && <Line type="monotone" dataKey="actualRps" name="Actual RPS" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />}
+            {selectedChartMetrics && selectedChartMetrics['queueLatency'] && <Line type="monotone" dataKey="queueLatency" name="Queue Latency (ms)" stroke="#f97316" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {(!selectedChartMetrics || selectedChartMetrics['cpu']) && <Line type="monotone" dataKey="cpu" name="CPU (%)" stroke="#ef4444" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {(!selectedChartMetrics || selectedChartMetrics['io']) && <Line type="monotone" dataKey="io" name="I/O (MB/s)" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />}
+            {selectedChartMetrics && selectedChartMetrics['wait_tasks'] && <Line type="monotone" dataKey="wait_tasks" name="DB Wait Tasks" stroke="#eab308" strokeWidth={2} dot={false} isAnimationActive={false} />}
+            {selectedChartMetrics && selectedChartMetrics['active_locks'] && <Line type="monotone" dataKey="active_locks" name="Active DB Locks" stroke="#ef4444" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['recordsModified'] && <Line type="monotone" dataKey="recordsModified" name="Records Modified" stroke="#a855f7" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['recordsInKafka'] && <Line type="monotone" dataKey="recordsInKafka" name="Records in Kafka" stroke="#ec4899" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['lag'] && <Line type="monotone" dataKey="lag" name="Pipeline Lag" stroke="#f59e0b" strokeWidth={2} dot={false} isAnimationActive={false} />}

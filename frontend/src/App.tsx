@@ -84,11 +84,16 @@ function App() {
     const rows = history.map(obj => Object.values(obj).join(',')).join('\n');
     const csv = `${header}\n${rows}`;
     
+    const approachData = APPROACHES.find(a => a.id === approach);
+    const approachName = approachData ? approachData.name.replace(/[^a-zA-Z0-9]/g, '_') : 'unknown';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = `sim_approach_${approach}_${approachName}_${timestamp}.csv`;
+
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.setAttribute('href', url);
-    a.setAttribute('download', 'telemetry_history.csv');
+    a.setAttribute('download', fileName);
     a.click();
     window.URL.revokeObjectURL(url);
   };
@@ -256,7 +261,7 @@ function App() {
               <AlertTriangle size={24} />
               <div className="flaw-content">
                 <h3>Flink State Limitation Warning</h3>
-                <p>This approach requires holding `invoice_batch` state in memory (RocksDB). Joins may fail if data arrives out of order or after State TTL expires.</p>
+                <p>Requires holding <span title="invoice_batch state is held in memory (RocksDB). Joins may fail if data arrives out of order or after State TTL expires." style={{textDecoration: 'underline dotted', cursor: 'help'}}>state in memory</span>, which can fail on late data.</p>
               </div>
             </div>
           )}
@@ -266,28 +271,15 @@ function App() {
               <AlertTriangle size={24} />
               <div className="flaw-content">
                 <h3>CDC Push + Consumer Enrichment Mode</h3>
-                <p>{numSubscribers} subscriber workers will consume Kafka events and perform non-blocking multi-table JOINs (billing_record → invoice_batch → subscriber_plan → subscriber_usage → rate_schedule) with NOLOCK hints.</p>
+                <p>{numSubscribers} subscriber workers will consume Kafka events and perform non-blocking <span title="(billing_record → invoice_batch → subscriber_plan → subscriber_usage → rate_schedule)" style={{textDecoration: 'underline dotted', cursor: 'help'}}>multi-table JOINs</span> with NOLOCK hints.</p>
               </div>
             </div>
           )}
 
-          <div className="static-dashboard-grid">
-            <div className="left-column">
-              {visibleComponents['systemHealth'] && (
-                <div className="grid-item-wrapper" style={{ flex: 1 }}>
-                  <SystemHealth 
-                    containerStats={stats?.containerStats || []}
-                    dbStats={stats?.dbStats}
-                    reconnect={reconnect} 
-                    isConnected={isConnected} 
-                  />
-                </div>
-              )}
-            </div>
-            
-            <div className="right-column">
+          <div className="dashboard-grid">
+            <div className="dashboard-main-col">
               {visibleComponents['metrics'] && (
-                <div className="grid-item-wrapper" style={{ flexShrink: 0 }}>
+                <div className="grid-item-metrics">
                   <MetricsGrid 
                     currentStats={currentStats} 
                     selectedChartMetrics={selectedChartMetrics}
@@ -297,7 +289,7 @@ function App() {
                 </div>
               )}
               {visibleComponents['telemetry'] && (
-                <div className="grid-item-wrapper" style={{ flex: '1 1 400px', minHeight: '400px' }}>
+                <div className="grid-item-telemetry">
                   <TelemetryChart 
                     history={history} 
                     chartSpeed={chartSpeed} 
@@ -308,18 +300,29 @@ function App() {
               )}
             </div>
 
-            {visibleComponents['logs'] && (
-              <div className="grid-item-wrapper" style={{ gridColumn: '1 / -1', height: '300px' }}>
-                <SystemLogs 
-                  logs={[...(stats?.logs || []), ...localLogs].sort((a, b) => b.timestamp - a.timestamp)} 
-                  clearLogs={() => {
-                    setLocalLogs([]);
-                    clearLogs();
-                  }} 
+            {visibleComponents['systemHealth'] && (
+              <div className="grid-item-health">
+                <SystemHealth 
+                  containerStats={stats?.containerStats || []}
+                  dbStats={stats?.dbStats}
+                  reconnect={reconnect} 
+                  isConnected={isConnected} 
                 />
               </div>
             )}
           </div>
+
+          {visibleComponents['logs'] && (
+            <div className="grid-item-logs">
+              <SystemLogs 
+                logs={[...(stats?.logs || []), ...localLogs].sort((a, b) => b.timestamp - a.timestamp)} 
+                clearLogs={() => {
+                  setLocalLogs([]);
+                  clearLogs();
+                }} 
+              />
+            </div>
+          )}
         </main>
       </div>
 

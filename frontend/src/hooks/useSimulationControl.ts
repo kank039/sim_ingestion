@@ -9,7 +9,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
   const [timeoutMs, setTimeoutMs] = useState(3000);
   const [isGradual, setIsGradual] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
-  const [isInsertsOnly, setIsInsertsOnly] = useState(false);
+  const [isInsertsOnly, setIsInsertsOnly] = useState(true);
   
   const [cardinality, setCardinality] = useState(100);
   const [insertWeight, setInsertWeight] = useState(0.5);

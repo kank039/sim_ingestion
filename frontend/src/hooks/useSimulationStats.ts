@@ -41,24 +41,28 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
           if (data.isRunning) {
             setHistory(prev => {
               const actualRps = prev.length > 0 ? Math.max(0, (data.recordsModified || 0) - prev[prev.length - 1].recordsModified) : 0;
-              const newHistory = [...prev, {
-                time: new Date().toLocaleTimeString(),
-                appLatency: data.appLatency,
-                queueLatency: data.queueLatency || 0,
-                p95: data.p95 || 0,
-                p99: data.p99 || 0,
-                cpu: data.dbStats?.cpu || 0,
-                io: data.dbStats?.io || 0,
-                wait_tasks: data.dbStats?.wait_tasks || 0,
-                active_locks: data.dbStats?.active_locks || 0,
-                recordsModified: data.recordsModified || 0,
-                recordsFailed: data.recordsFailed || 0,
-                recordsInKafka: data.recordsInKafka || 0,
-                lag: data.lag || 0,
-                actualRps,
-                consumerE2eLatency: data.subscriberStats?.avgE2eLatency || 0,
-                consumerEnrichmentLatency: data.subscriberStats?.avgEnrichmentLatency || 0
-              }];
+                const totalRecords = (data.recordsModified || 0) + (data.recordsFailed || 0);
+                const successRate = totalRecords > 0 ? parseFloat(((data.recordsModified / totalRecords) * 100).toFixed(2)) : 100;
+                
+                const newHistory = [...prev, {
+                  time: new Date().toLocaleTimeString(),
+                  appLatency: data.appLatency,
+                  queueLatency: data.queueLatency || 0,
+                  p95: data.p95 || 0,
+                  p99: data.p99 || 0,
+                  cpu: data.dbStats?.cpu || 0,
+                  io: data.dbStats?.io || 0,
+                  wait_tasks: data.dbStats?.wait_tasks || 0,
+                  active_locks: data.dbStats?.active_locks || 0,
+                  recordsModified: data.recordsModified || 0,
+                  recordsFailed: data.recordsFailed || 0,
+                  recordsInKafka: data.recordsInKafka || 0,
+                  lag: data.lag || 0,
+                  actualRps,
+                  successRate,
+                  consumerE2eLatency: data.subscriberStats?.avgE2eLatency || 0,
+                  consumerEnrichmentLatency: data.subscriberStats?.avgEnrichmentLatency || 0
+                }];
               return newHistory.slice(-3600);
             });
           }

@@ -107,7 +107,8 @@ export async function getDBStats() {
             tempDbMB: Math.round((tempdbRes.recordset[0]?.TempDbMB || 0) * 100) / 100,
             activeConnections: connRes.recordset[0]?.ActiveConnections || 0
         };
-    } catch (e) {
+    } catch (e: any) {
+        require('fs').appendFileSync('d:\\tmp\\db_error.log', new Date().toISOString() + ': ' + e.message + '\n' + (e.stack || '') + '\n');
         console.error("Failed to get DB stats", e);
         return { cpu: 0, io: 0, wait_tasks: 0, active_locks: 0, ldfSizeMB: 0, ple: 0, tempDbMB: 0, activeConnections: 0 };
     }
