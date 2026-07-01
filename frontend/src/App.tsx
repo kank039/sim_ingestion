@@ -1,23 +1,21 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AlertTriangle, LayoutDashboard, Check, Download } from 'lucide-react';
 import './App.css';
 
 import { useSimulationStats } from './hooks/useSimulationStats';
 import { useSimulationControl } from './hooks/useSimulationControl';
+import { APPROACHES } from './constants';
 
 import { ControlPanel } from './components/ControlPanel';
 import { SystemHealth } from './components/SystemHealth';
 import { MetricsGrid } from './components/MetricsGrid';
 import TelemetryChart from './components/TelemetryChart';
 import { SystemLogs } from './components/SystemLogs';
+import { RunSummaryModal } from './components/RunSummaryModal';
+import { RunHistoryModal } from './components/RunHistoryModal';
 import type { SystemLog } from './types';
 
-const APPROACHES = [
-  { id: 1, name: "Database Triggers (DBA Outbox)" },
-  { id: 2, name: "Transactional Outbox (Recommended)" },
-  { id: 3, name: "Stream-to-Stream Join (Flink)" },
-  { id: 4, name: "JDBC SMT (Interceptor)" }
-];
+
 
 function App() {
   const [localLogs, setLocalLogs] = useState<SystemLog[]>([]);
@@ -30,7 +28,11 @@ function App() {
     approach, setApproach, rps, setRps, endRps, setEndRps,
     timeoutMs, setTimeoutMs,
     isGradual, setIsGradual, isCleaning, updateSim, handleStartStop, handlePause,
-    isInsertsOnly, setIsInsertsOnly
+    isInsertsOnly, setIsInsertsOnly,
+    cardinality, setCardinality,
+    insertWeight, setInsertWeight,
+    updateWeight, setUpdateWeight,
+    deleteWeight, setDeleteWeight
   } = useSimulationControl(addActionLog);
 
   const [chartSpeed, setChartSpeed] = useState<'fast' | 'normal' | 'slow'>('normal');
@@ -96,6 +98,32 @@ function App() {
   const isRunning = stats?.isRunning || false;
   const flawAlert = stats?.flawAlert || null;
 
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [lastRunStats, setLastRunStats] = useState<any>(null);
+  const [lastRunHistory, setLastRunHistory] = useState<any[]>([]);
+  const prevIsRunning = React.useRef(isRunning);
+
+  useEffect(() => {
+    if (prevIsRunning.current && !isRunning) {
+        if (stats && stats.elapsedSec && stats.elapsedSec > 0) {
+            setLastRunStats(stats);
+            setLastRunHistory(history);
+            setShowSummaryModal(true);
+        }
+    }
+    prevIsRunning.current = isRunning;
+  }, [isRunning, stats, history]);
+
+  const handleSaveRun = async (runData: any) => {
+      const res = await fetch('http://localhost:3001/api/simulate/save-run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(runData)
+      });
+      if (!res.ok) throw new Error(await res.text());
+  };
+
   return (
     <div className="dashboard-container">
       {/* Toast for connection error */}
@@ -121,10 +149,26 @@ function App() {
               <span className="approach-label">Approach:</span>
               <span className="approach-name">{APPROACHES.find(a => a.id === approach)?.name}</span>
             </div>
+            {stats?.elapsedSec !== undefined && (
+              <div className="header-approach" style={{ marginLeft: '1rem' }}>
+                <span className="approach-label">Elapsed:</span>
+                <span className="approach-name">
+                  {Math.floor(stats.elapsedSec / 60)}m {stats.elapsedSec % 60}s
+                </span>
+              </div>
+            )}
           </div>
         </div>
         
         <div className="header-right">
+          <button 
+            className="icon-btn" 
+            onClick={() => setShowHistoryModal(true)} 
+            title="View Run History"
+            aria-label="View Run History"
+          >
+            <HistoryIcon size={20} />
+          </button>
           <button 
             className="icon-btn" 
             onClick={downloadCSV} 
@@ -158,6 +202,10 @@ function App() {
               isRunning={isRunning} isCleaning={isCleaning}
               isInsertsOnly={isInsertsOnly} setIsInsertsOnly={setIsInsertsOnly}
               updateSim={updateSim} handleStartStop={handleStartStop} handlePause={handlePause}
+              cardinality={cardinality} setCardinality={setCardinality}
+              insertWeight={insertWeight} setInsertWeight={setInsertWeight}
+              updateWeight={updateWeight} setUpdateWeight={setUpdateWeight}
+              deleteWeight={deleteWeight} setDeleteWeight={setDeleteWeight}
             />
             
             <div className="sidebar-section-divider"></div>
@@ -258,8 +306,29 @@ function App() {
           </div>
         </main>
       </div>
+
+      {showSummaryModal && lastRunStats && (
+        <RunSummaryModal 
+          stats={lastRunStats} 
+          history={lastRunHistory} 
+          onClose={() => setShowSummaryModal(false)} 
+          onSave={handleSaveRun}
+        />
+      )}
+
+      {showHistoryModal && (
+        <RunHistoryModal onClose={() => setShowHistoryModal(false)} />
+      )}
     </div>
   );
 }
+
+// Add HistoryIcon
+const HistoryIcon = ({ size }: { size: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10"></circle>
+    <polyline points="12 6 12 12 16 14"></polyline>
+  </svg>
+);
 
 export default App;

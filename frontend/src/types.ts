@@ -8,12 +8,18 @@ export interface ContainerStat {
 export interface TelemetryPoint {
   time: string;
   appLatency: number;
+  queueLatency?: number;
+  p95?: number;
+  p99?: number;
   cpu: number;
   io: number;
+  wait_tasks?: number;
+  active_locks?: number;
   recordsModified: number;
   recordsFailed: number;
   recordsInKafka: number;
   lag: number;
+  actualRps?: number;
 }
 
 export interface SystemLog {
@@ -24,16 +30,22 @@ export interface SystemLog {
 }
 
 export interface SimulationStats {
+  runId?: string;
+  elapsedSec?: number;
   isRunning: boolean;
   approach: number;
   rps: number;
   appLatency: number;
+  queueLatency?: number;
+  p95?: number;
+  p99?: number;
   flawAlert: string | null;
-  dbStats: any; // Or specific shape like { cpu: number, io: number }
+  dbStats: { cpu: number; io: number; wait_tasks?: number; active_locks?: number };
   containerStats: ContainerStat[];
   recordsModified: number;
   recordsFailed: number;
   recordsInKafka: number;
   lag: number;
-  logs: SystemLog[];
+  logs?: SystemLog[];
+  newLogs?: SystemLog[];
 }

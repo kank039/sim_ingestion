@@ -24,20 +24,40 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
       eventSource.onmessage = (e) => {
         try {
           const data: SimulationStats = JSON.parse(e.data);
-          setStats(data);
+          
+          setStats(prevStats => {
+              if (prevStats?.runId !== data.runId) {
+                  setHistory([]);
+                  addActionLog('New run detected, clearing history.', 'info');
+              }
+              if (data.newLogs && data.newLogs.length > 0) {
+                  data.logs = [...(prevStats?.logs || []), ...data.newLogs].slice(-500);
+              } else {
+                  data.logs = prevStats?.logs || [];
+              }
+              return data;
+          });
+
           if (data.isRunning) {
             setHistory(prev => {
+              const actualRps = prev.length > 0 ? Math.max(0, (data.recordsModified || 0) - prev[prev.length - 1].recordsModified) : 0;
               const newHistory = [...prev, {
                 time: new Date().toLocaleTimeString(),
                 appLatency: data.appLatency,
+                queueLatency: data.queueLatency || 0,
+                p95: data.p95 || 0,
+                p99: data.p99 || 0,
                 cpu: data.dbStats?.cpu || 0,
                 io: data.dbStats?.io || 0,
+                wait_tasks: data.dbStats?.wait_tasks || 0,
+                active_locks: data.dbStats?.active_locks || 0,
                 recordsModified: data.recordsModified || 0,
                 recordsFailed: data.recordsFailed || 0,
                 recordsInKafka: data.recordsInKafka || 0,
-                lag: data.lag || 0
+                lag: data.lag || 0,
+                actualRps
               }];
-              return newHistory.slice(-300);
+              return newHistory.slice(-3600);
             });
           }
         } catch(err) {

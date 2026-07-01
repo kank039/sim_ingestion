@@ -10,9 +10,15 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
   const [isGradual, setIsGradual] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
   const [isInsertsOnly, setIsInsertsOnly] = useState(false);
+  
+  const [cardinality, setCardinality] = useState(100);
+  const [insertWeight, setInsertWeight] = useState(0.5);
+  const [updateWeight, setUpdateWeight] = useState(0.3);
+  const [deleteWeight, setDeleteWeight] = useState(0.2);
+  
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  const updateSim = useCallback((newApproach: number, newRps: number, gradual: boolean, maxRps: number, isRunning: boolean, newTimeoutMs: number, insertsOnly: boolean) => {
+  const updateSim = useCallback((newApproach: number, newRps: number, gradual: boolean, maxRps: number, isRunning: boolean, newTimeoutMs: number, insertsOnly: boolean, card: number, wIns: number, wUpd: number, wDel: number) => {
     if (!isRunning) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     
@@ -21,7 +27,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
         const res = await fetch(`${API_BASE}/simulate/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approach: newApproach, rps: newRps, gradual, endRps: maxRps, timeoutMs: newTimeoutMs, insertsOnly })
+          body: JSON.stringify({ approach: newApproach, rps: newRps, gradual, endRps: maxRps, timeoutMs: newTimeoutMs, insertsOnly, cardinality: card, insertWeight: wIns, updateWeight: wUpd, deleteWeight: wDel })
         });
         if (!res.ok) throw new Error(await res.text());
         addActionLog(`Updated simulation (Approach ${newApproach}, RPS ${newRps})`, 'info');
@@ -49,7 +55,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
         const res = await fetch(`${API_BASE}/simulate/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approach, rps, gradual: isGradual, endRps, timeoutMs, insertsOnly: isInsertsOnly })
+          body: JSON.stringify({ approach, rps, gradual: isGradual, endRps, timeoutMs, insertsOnly: isInsertsOnly, cardinality, insertWeight, updateWeight, deleteWeight })
         });
         if (!res.ok) throw new Error(await res.text());
         addActionLog('Simulation started successfully.', 'info');
@@ -72,21 +78,17 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
   };
 
   return {
-    approach,
-    setApproach,
-    rps,
-    setRps,
-    endRps,
-    setEndRps,
-    timeoutMs,
-    setTimeoutMs,
-    isGradual,
-    setIsGradual,
+    approach, setApproach,
+    rps, setRps,
+    endRps, setEndRps,
+    timeoutMs, setTimeoutMs,
+    isGradual, setIsGradual,
     isCleaning,
-    updateSim,
-    handleStartStop,
-    handlePause,
-    isInsertsOnly,
-    setIsInsertsOnly
+    updateSim, handleStartStop, handlePause,
+    isInsertsOnly, setIsInsertsOnly,
+    cardinality, setCardinality,
+    insertWeight, setInsertWeight,
+    updateWeight, setUpdateWeight,
+    deleteWeight, setDeleteWeight
   };
 }

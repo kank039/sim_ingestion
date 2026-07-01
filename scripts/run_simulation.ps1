@@ -113,9 +113,9 @@ if (-not (Test-Path -Path $outputDir)) {
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$csvFile = "$outputDir\simulation_stats_$timestamp.csv"
+$csvFile = "$outputDir\sim_app${approach}_rps${rps}_$timestamp.csv"
 
-$headers = "Time,Approach,RPS,AppLatency(ms),RecordsModified,RecordsFailed,RecordsInKafka,Lag,DB_CPU,DB_BatchReqSec,App_CPU,App_Mem,Debezium_CPU,Debezium_Mem,Kafka_CPU,Kafka_Mem"
+$headers = "Time,Approach,RPS,AppLatency(ms),QueueLatency(ms),p95(ms),p99(ms),RecordsModified,RecordsFailed,RecordsInKafka,Lag,DB_CPU,DB_IO,DB_WaitTasks,DB_ActiveLocks,App_CPU,App_Mem,Debezium_CPU,Debezium_Mem,Kafka_CPU,Kafka_Mem"
 Out-File -FilePath $csvFile -InputObject $headers -Encoding UTF8
 
 Write-Host "`nSimulation running for $duration seconds. Recording stats per second..." -ForegroundColor Cyan
@@ -126,8 +126,10 @@ for ($i = 0; $i -lt $duration; $i++) {
     try {
         $stats = Invoke-RestMethod -Uri "$BaseUrl/stats" -Method Get -ErrorAction SilentlyContinue
         if ($null -ne $stats) {
-            $dbCpu = if ($null -ne $stats.dbStats -and $null -ne $stats.dbStats.cpu_percent) { $stats.dbStats.cpu_percent } else { 0 }
-            $dbBatch = if ($null -ne $stats.dbStats -and $null -ne $stats.dbStats.batch_requests_sec) { $stats.dbStats.batch_requests_sec } else { 0 }
+            $dbCpu = if ($null -ne $stats.dbStats -and $null -ne $stats.dbStats.cpu) { $stats.dbStats.cpu } else { 0 }
+            $dbIo = if ($null -ne $stats.dbStats -and $null -ne $stats.dbStats.io) { $stats.dbStats.io } else { 0 }
+            $dbWaits = if ($null -ne $stats.dbStats -and $null -ne $stats.dbStats.wait_tasks) { $stats.dbStats.wait_tasks } else { 0 }
+            $dbLocks = if ($null -ne $stats.dbStats -and $null -ne $stats.dbStats.active_locks) { $stats.dbStats.active_locks } else { 0 }
             
             $appContainer = $null
             $debContainer = $null
@@ -148,7 +150,7 @@ for ($i = 0; $i -lt $duration; $i++) {
 
             $time = (Get-Date).ToString("o")
             
-            $row = "$time,$($stats.approach),$($stats.rps),$($stats.appLatency),$($stats.recordsModified),$($stats.recordsFailed),$($stats.recordsInKafka),$($stats.lag),$dbCpu,$dbBatch,$appCpu,$appMem,$debCpu,$debMem,$kafCpu,$kafMem"
+            $row = "$time,$($stats.approach),$($stats.rps),$($stats.appLatency),$($stats.queueLatency),$($stats.p95),$($stats.p99),$($stats.recordsModified),$($stats.recordsFailed),$($stats.recordsInKafka),$($stats.lag),$dbCpu,$dbIo,$dbWaits,$dbLocks,$appCpu,$appMem,$debCpu,$debMem,$kafCpu,$kafMem"
             
             Add-Content -Path $csvFile -Value $row
             

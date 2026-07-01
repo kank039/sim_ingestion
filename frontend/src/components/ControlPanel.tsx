@@ -1,12 +1,8 @@
 import React from 'react';
 import { Settings2, Play, Square } from 'lucide-react';
+import { APPROACHES } from '../constants';
 
-const APPROACHES = [
-  { id: 1, name: "Database Triggers (DBA Outbox)" },
-  { id: 2, name: "Transactional Outbox (Recommended)" },
-  { id: 3, name: "Stream-to-Stream Join (Flink)" },
-  { id: 4, name: "JDBC SMT (Interceptor)" }
-];
+
 
 interface ControlPanelProps {
   approach: number;
@@ -20,9 +16,18 @@ interface ControlPanelProps {
   timeoutMs: number;
   setTimeoutMs: (v: number) => void;
   isRunning: boolean;
+  isCleaning: boolean;
   isInsertsOnly: boolean;
   setIsInsertsOnly: (v: boolean) => void;
-  updateSim: (approach: number, rps: number, gradual: boolean, endRps: number, isRunning: boolean, timeoutMs: number, insertsOnly: boolean) => void;
+  cardinality: number;
+  setCardinality: (v: number) => void;
+  insertWeight: number;
+  setInsertWeight: (v: number) => void;
+  updateWeight: number;
+  setUpdateWeight: (v: number) => void;
+  deleteWeight: number;
+  setDeleteWeight: (v: number) => void;
+  updateSim: (approach: number, rps: number, gradual: boolean, endRps: number, isRunning: boolean, timeoutMs: number, insertsOnly: boolean, card: number, wIns: number, wUpd: number, wDel: number) => void;
   handleStartStop: (isRunning: boolean) => void;
   handlePause: () => void;
 }
@@ -30,7 +35,8 @@ interface ControlPanelProps {
 export const ControlPanel: React.FC<ControlPanelProps> = ({
   approach, setApproach, rps, setRps, isGradual, setIsGradual,
   endRps, setEndRps, timeoutMs, setTimeoutMs, isRunning, isCleaning, updateSim, handleStartStop,
-  isInsertsOnly, setIsInsertsOnly, handlePause
+  isInsertsOnly, setIsInsertsOnly, handlePause,
+  cardinality, setCardinality, insertWeight, setInsertWeight, updateWeight, setUpdateWeight, deleteWeight, setDeleteWeight
 }) => {
   const confirmStop = () => {
     if (isRunning) {
@@ -40,6 +46,25 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     } else {
       handleStartStop(false);
     }
+  };
+
+  const onWeightChange = (type: 'insert' | 'update' | 'delete', val: number) => {
+    let wIns = insertWeight, wUpd = updateWeight, wDel = deleteWeight;
+    if (type === 'insert') wIns = val;
+    if (type === 'update') wUpd = val;
+    if (type === 'delete') wDel = val;
+    
+    const sum = wIns + wUpd + wDel;
+    if (sum > 0) {
+        wIns = wIns / sum;
+        wUpd = wUpd / sum;
+        wDel = wDel / sum;
+    }
+    
+    setInsertWeight(wIns);
+    setUpdateWeight(wUpd);
+    setDeleteWeight(wDel);
+    updateSim(approach, rps, isGradual, endRps, isRunning, timeoutMs, isInsertsOnly, cardinality, wIns, wUpd, wDel);
   };
 
   return (
@@ -65,7 +90,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             onChange={(e) => {
               const v = Number(e.target.value);
               setRps(v);
-              updateSim(approach, v, isGradual, endRps, isRunning, timeoutMs, isInsertsOnly);
+              updateSim(approach, v, isGradual, endRps, isRunning, timeoutMs, isInsertsOnly, cardinality, insertWeight, updateWeight, deleteWeight);
             }}
           />
           <span className="slider-val">{rps} {isGradual && 'Start'}</span>
@@ -80,7 +105,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               onChange={(e) => {
                 const v = Number(e.target.value);
                 setEndRps(v);
-                updateSim(approach, rps, isGradual, v, isRunning, timeoutMs, isInsertsOnly);
+                updateSim(approach, rps, isGradual, v, isRunning, timeoutMs, isInsertsOnly, cardinality, insertWeight, updateWeight, deleteWeight);
               }}
             />
             <span className="slider-val">{endRps} Max</span>
@@ -98,11 +123,28 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             onChange={(e) => {
               const v = Number(e.target.value);
               setTimeoutMs(v);
-              updateSim(approach, rps, isGradual, endRps, isRunning, v, isInsertsOnly);
+              updateSim(approach, rps, isGradual, endRps, isRunning, v, isInsertsOnly, cardinality, insertWeight, updateWeight, deleteWeight);
             }}
           />
           <span className="slider-val">{timeoutMs} ms</span>
         </div>
+      </div>
+      
+      <div className="control-group">
+        <label>Batch ID Cardinality</label>
+        <select 
+          value={cardinality} 
+          onChange={e => {
+            const v = Number(e.target.value);
+            setCardinality(v);
+            updateSim(approach, rps, isGradual, endRps, isRunning, timeoutMs, isInsertsOnly, v, insertWeight, updateWeight, deleteWeight);
+          }}
+          style={{ width: '100%', padding: '4px', background: '#333', color: '#fff', border: '1px solid #555' }}
+        >
+          <option value={100}>100 (High Contention)</option>
+          <option value={10000}>10,000 (Medium Contention)</option>
+          <option value={1000000}>1,000,000 (Low Contention)</option>
+        </select>
       </div>
 
       <div className="control-group">
@@ -112,10 +154,30 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             checked={isInsertsOnly} 
             onChange={e => {
               setIsInsertsOnly(e.target.checked);
-              updateSim(approach, rps, isGradual, endRps, isRunning, timeoutMs, e.target.checked);
+              updateSim(approach, rps, isGradual, endRps, isRunning, timeoutMs, e.target.checked, cardinality, insertWeight, updateWeight, deleteWeight);
             }} 
           /> Inserts Only Mode
         </label>
+        
+        {!isInsertsOnly && (
+            <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.25rem', fontSize: '0.75rem', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Insert:</span>
+                    <input type="range" min="0" max="1" step="0.05" value={insertWeight} onChange={e => onWeightChange('insert', Number(e.target.value))} style={{width: '60px'}} />
+                    <span>{Math.round(insertWeight * 100)}%</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Update:</span>
+                    <input type="range" min="0" max="1" step="0.05" value={updateWeight} onChange={e => onWeightChange('update', Number(e.target.value))} style={{width: '60px'}} />
+                    <span>{Math.round(updateWeight * 100)}%</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Delete:</span>
+                    <input type="range" min="0" max="1" step="0.05" value={deleteWeight} onChange={e => onWeightChange('delete', Number(e.target.value))} style={{width: '60px'}} />
+                    <span>{Math.round(deleteWeight * 100)}%</span>
+                </div>
+            </div>
+        )}
       </div>
 
       <div className="control-group">
@@ -127,7 +189,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               className={`approach-btn ${approach === opt.id ? 'active' : ''}`}
               onClick={() => {
                 setApproach(opt.id);
-                updateSim(opt.id, rps, isGradual, endRps, isRunning, timeoutMs, isInsertsOnly);
+                updateSim(opt.id, rps, isGradual, endRps, isRunning, timeoutMs, isInsertsOnly, cardinality, insertWeight, updateWeight, deleteWeight);
               }}
             >
               {opt.name}

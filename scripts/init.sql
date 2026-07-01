@@ -65,6 +65,18 @@ BEGIN
 END
 GO
 
+-- 5. Enrichment Requests Table for Approach 3 (Flink)
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[enrichment_requests]') AND type in (N'U'))
+BEGIN
+    CREATE TABLE enrichment_requests (
+        id INT IDENTITY(1,1) PRIMARY KEY,
+        batch_id INT NOT NULL,
+        payload NVARCHAR(MAX),
+        created_at DATETIME2 DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
+
 -- Create Trigger for Approach 1
 IF NOT EXISTS (SELECT * FROM sys.triggers WHERE name = 'trg_billing_record_cdc')
 BEGIN
@@ -108,10 +120,6 @@ END
 GO
 
 -- Enable CDC on Tables
-IF sys.fn_cdc_has_column_changed() IS NULL -- this is just a dummy way to check, better to check sys.tables
-    -- Wait, checking CDC enabled:
-GO
-
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'billing_record' AND is_tracked_by_cdc = 1)
 BEGIN
     EXEC sys.sp_cdc_enable_table
@@ -141,6 +149,14 @@ BEGIN
     EXEC sys.sp_cdc_enable_table
         @source_schema = N'dbo',
         @source_name   = N'outbox_events',
+        @role_name     = NULL;
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'enrichment_requests' AND is_tracked_by_cdc = 1)
+BEGIN
+    EXEC sys.sp_cdc_enable_table
+        @source_schema = N'dbo',
+        @source_name   = N'enrichment_requests',
         @role_name     = NULL;
 END
 GO

@@ -33,10 +33,27 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
     <div className="glass-panel stats-grid-container">
       <div className="stats-grid">
         <div className="stat-card" style={{ position: 'relative' }}>
+          {renderCheckbox('actualRps')}
+          <Activity className="stat-icon" style={{ color: 'var(--accent-green)' }} />
+          <div className="stat-value">{currentStats.actualRps || 0}</div>
+          <div className="stat-label">Actual RPS</div>
+        </div>
+        <div className="stat-card" style={{ position: 'relative' }}>
           {renderCheckbox('appLatency')}
           <Clock className="stat-icon" />
           <div className="stat-value">{currentStats.appLatency} <span className="stat-unit">ms</span></div>
-          <div className="stat-label">Application Latency</div>
+          <div className="stat-label">DB Latency (Avg)</div>
+        </div>
+        <div className="stat-card" style={{ position: 'relative' }}>
+          {renderCheckbox('queueLatency')}
+          <Clock className="stat-icon" style={{ color: 'var(--accent-orange)' }} />
+          <div className="stat-value">{currentStats.queueLatency || 0} <span className="stat-unit">ms</span></div>
+          <div className="stat-label">Queue Latency</div>
+        </div>
+        <div className="stat-card" style={{ position: 'relative' }}>
+          <div className="stat-value" style={{ fontSize: '1rem', marginTop: '0.5rem' }}>p95: {currentStats.p95 || 0}ms</div>
+          <div className="stat-value" style={{ fontSize: '1rem', marginTop: '0.25rem' }}>p99: {currentStats.p99 || 0}ms</div>
+          <div className="stat-label" style={{ marginTop: '0.5rem' }}>Percentiles</div>
         </div>
         <div className="stat-card" style={{ position: 'relative' }}>
           {renderCheckbox('cpu')}
@@ -49,6 +66,18 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
           <HardDrive className="stat-icon" />
           <div className="stat-value">{currentStats.io} <span className="stat-unit">MB/s</span></div>
           <div className="stat-label">SQL Server I/O</div>
+        </div>
+        <div className="stat-card" style={{ position: 'relative' }}>
+          {renderCheckbox('wait_tasks')}
+          <Database className="stat-icon" style={{ color: currentStats.wait_tasks && currentStats.wait_tasks > 10 ? 'var(--accent-red)' : 'inherit' }} />
+          <div className="stat-value">{currentStats.wait_tasks || 0}</div>
+          <div className="stat-label">DB Wait Tasks</div>
+        </div>
+        <div className="stat-card" style={{ position: 'relative' }}>
+          {renderCheckbox('active_locks')}
+          <Database className="stat-icon" />
+          <div className="stat-value">{currentStats.active_locks || 0}</div>
+          <div className="stat-label">Active DB Locks</div>
         </div>
         <div className="stat-card" style={{ position: 'relative' }}>
           {renderCheckbox('recordsModified')}

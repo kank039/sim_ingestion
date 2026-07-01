@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import os from 'os';
 import path from 'path';
+import fs from 'fs/promises';
 import { Worker } from 'worker_threads';
 import { connectDB, getDBStats, getPool } from './db';
 import http from 'http';
@@ -92,7 +93,7 @@ let readyWorkers = 0;
 let isRunning = false;
 let currentApproach = 1;
 let currentRps = 10;
-const workerLatencies = new Map<number, number>();
+const workerLatencies = new Map<number, any>();
 let globalRecordsModified = 0;
 let globalRecordsFailed = 0;
 let baselineKafkaOffset = 0;
@@ -118,7 +119,12 @@ for (let i = 0; i < numWorkers; i++) {
             readyWorkers++;
             console.log(`Worker ${i+1} ready (${readyWorkers}/${numWorkers})`);
         } else if (msg.type === 'stats') {
-            workerLatencies.set(i, msg.avgLatency || 0);
+            workerLatencies.set(i, {
+                avgLatency: msg.avgLatency || 0,
+                queueAvg: msg.queueAvg || 0,
+                p95: msg.p95 || 0,
+                p99: msg.p99 || 0
+            });
             if (msg.modified) {
                 globalRecordsModified += msg.modified;
             }
@@ -149,20 +155,49 @@ app.get('/api/stats', async (req, res) => {
             // Topic might not exist yet
         }
         
+        const lag = Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset));
         let flawAlert = null;
-        if (currentApproach === 4 && currentRps > 20) {
+        if (currentApproach === 4 && lag > 0) {
             flawAlert = "RACE CONDITION DETECTED: SMT queried old data for rapid sequential updates.";
         }
         
         let totalLatency = 0;
-        workerLatencies.forEach(lat => totalLatency += lat);
-        const avgLatency = workerLatencies.size > 0 ? totalLatency / workerLatencies.size : 0;
+        let totalQueueAvg = 0;
+        let latCount = 0;
+        let queueLatCount = 0;
+        let p95Sum = 0;
+        let p99Sum = 0;
+        
+        workerLatencies.forEach((val: any) => {
+            if (typeof val === 'number') {
+                totalLatency += val;
+                latCount++;
+            } else {
+                totalLatency += val.avgLatency;
+                totalQueueAvg += val.queueAvg;
+                p95Sum += val.p95;
+                p99Sum += val.p99;
+                latCount++;
+            }
+        });
+        
+        const avgLatency = latCount > 0 ? totalLatency / latCount : 0;
+        const avgQueue = latCount > 0 ? totalQueueAvg / latCount : 0;
+        const p95 = latCount > 0 ? p95Sum / latCount : 0;
+        const p99 = latCount > 0 ? p99Sum / latCount : 0;
+        
+        const elapsedSec = isRunning ? Math.floor((Date.now() - runStartTime) / 1000) : 0;
         
         res.json({
+            runId: currentRunId,
+            elapsedSec,
             isRunning,
             approach: currentApproach,
             rps: currentRps,
             appLatency: Math.round(avgLatency),
+            queueLatency: Math.round(avgQueue),
+            p95: Math.round(p95),
+            p99: Math.round(p99),
             flawAlert,
             dbStats,
             containerStats,
@@ -170,7 +205,7 @@ app.get('/api/stats', async (req, res) => {
             recordsFailed: globalRecordsFailed,
             recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
             lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
-            logs: systemLogs
+            logs: systemLogs // For GET, return all logs
         });
     } catch (e) {
         res.status(500).json({ error: String(e) });
@@ -178,17 +213,26 @@ app.get('/api/stats', async (req, res) => {
 });
 
 app.post('/api/simulate/start', (req, res) => {
-    const { approach, rps, gradual, endRps, timeoutMs, insertsOnly } = req.body;
+    const { approach, rps, gradual, endRps, timeoutMs, insertsOnly, cardinality, insertWeight, updateWeight, deleteWeight } = req.body;
     currentApproach = approach;
     currentRps = rps;
     isRunning = true;
+    
+    globalRecordsModified = 0;
+    globalRecordsFailed = 0;
+    
+    currentRunId = Date.now().toString();
+    runStartTime = Date.now();
     
     if (gradualInterval) clearInterval(gradualInterval);
     
     const updateWorkers = (newRps: number) => {
         const rpsPerWorker = Math.ceil(newRps / numWorkers);
         for (const worker of workers) {
-            worker.postMessage({ type: 'start', approach, rps: rpsPerWorker, timeoutMs, insertsOnly });
+            worker.postMessage({ 
+                type: 'start', approach, rps: rpsPerWorker, timeoutMs, insertsOnly, 
+                cardinality, insertWeight, updateWeight, deleteWeight 
+            });
         }
     };
     
@@ -224,16 +268,20 @@ app.post('/api/simulate/stop', (req, res) => {
     res.json({ message: 'Simulation stopped' });
 });
 
-let sseClients: express.Response[] = [];
+let currentRunId = Date.now().toString();
+let runStartTime = Date.now();
+
+let sseClients: { res: express.Response, lastLogTimestamp: number }[] = [];
 app.get('/api/stats/stream', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
     
-    sseClients.push(res);
+    const clientObj = { res, lastLogTimestamp: 0 };
+    sseClients.push(clientObj);
     req.on('close', () => {
-        sseClients = sseClients.filter(c => c !== res);
+        sseClients = sseClients.filter(c => c !== clientObj);
     });
 });
 
@@ -251,31 +299,68 @@ setInterval(async () => {
             recordsInKafka = offsets.reduce((sum, partition) => sum + parseInt(partition.high, 10), 0);
         } catch(e) {}
         
+        const lag = Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset));
         let flawAlert = null;
-        if (currentApproach === 4 && currentRps > 20) {
+        if (currentApproach === 4 && lag > 0) {
             flawAlert = "RACE CONDITION DETECTED: SMT queried old data for rapid sequential updates.";
         }
         
         let totalLatency = 0;
-        workerLatencies.forEach(lat => totalLatency += lat);
-        const avgLatency = workerLatencies.size > 0 ? totalLatency / workerLatencies.size : 0;
+        let totalQueueAvg = 0;
+        let latCount = 0;
+        let queueLatCount = 0;
+        let p95Sum = 0;
+        let p99Sum = 0;
         
-        const payload = JSON.stringify({
-            isRunning,
-            approach: currentApproach,
-            rps: currentRps,
-            appLatency: Math.round(avgLatency),
-            flawAlert,
-            dbStats,
-            containerStats,
-            recordsModified: globalRecordsModified,
-            recordsFailed: globalRecordsFailed,
-            recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
-            lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
-            logs: systemLogs
+        workerLatencies.forEach((val: any) => {
+            // Check if workerLatencies is storing an object now instead of just a number
+            if (typeof val === 'number') {
+                totalLatency += val;
+                latCount++;
+            } else {
+                totalLatency += val.avgLatency;
+                totalQueueAvg += val.queueAvg;
+                p95Sum += val.p95;
+                p99Sum += val.p99;
+                latCount++;
+            }
         });
         
-        sseClients.forEach(client => client.write(`data: ${payload}\n\n`));
+        const avgLatency = latCount > 0 ? totalLatency / latCount : 0;
+        const avgQueue = latCount > 0 ? totalQueueAvg / latCount : 0;
+        const p95 = latCount > 0 ? p95Sum / latCount : 0;
+        const p99 = latCount > 0 ? p99Sum / latCount : 0;
+        
+        const elapsedSec = isRunning ? Math.floor((Date.now() - runStartTime) / 1000) : 0;
+        
+        sseClients.forEach(client => {
+            const newLogs = systemLogs.filter(log => log.timestamp > client.lastLogTimestamp);
+            if (newLogs.length > 0) {
+                client.lastLogTimestamp = newLogs[0].timestamp;
+            }
+            
+            const payload = JSON.stringify({
+                runId: currentRunId,
+                elapsedSec,
+                isRunning,
+                approach: currentApproach,
+                rps: currentRps,
+                appLatency: Math.round(avgLatency),
+                queueLatency: Math.round(avgQueue),
+                p95: Math.round(p95),
+                p99: Math.round(p99),
+                flawAlert,
+                dbStats,
+                containerStats,
+                recordsModified: globalRecordsModified,
+                recordsFailed: globalRecordsFailed,
+                recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
+                lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
+                newLogs
+            });
+            
+            client.res.write(`data: ${payload}\n\n`);
+        });
     } catch(e) {
         console.error("SSE Broadcast Error:", e);
     }
@@ -321,7 +406,7 @@ app.post('/api/simulate/clean', async (req, res) => {
             addLog('Kafka topics wiped or ignored.');
         }
         
-        globalRecordsPushed = 0;
+        globalRecordsModified = 0;
         globalRecordsFailed = 0;
         baselineKafkaOffset = 0;
         
@@ -358,6 +443,67 @@ app.post('/api/system/reconnect', async (req, res) => {
     } catch (e) {
         addLog('Error reconnecting: ' + String(e));
         res.status(500).json({ error: String(e) });
+    }
+});
+
+const RESULTS_DIR = path.join(__dirname, '../../docs/results');
+
+app.post('/api/simulate/save-run', async (req, res) => {
+    try {
+        await fs.mkdir(RESULTS_DIR, { recursive: true });
+        const data = req.body;
+        const runId = data.runId || Date.now().toString();
+        const filePath = path.join(RESULTS_DIR, `${runId}.json`);
+        await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+        addLog(`Run ${runId} saved successfully.`);
+        res.json({ message: 'Run saved', runId });
+    } catch (e) {
+        console.error("Save Run Error:", e);
+        res.status(500).json({ error: String(e) });
+    }
+});
+
+app.get('/api/results', async (req, res) => {
+    try {
+        await fs.mkdir(RESULTS_DIR, { recursive: true });
+        const files = await fs.readdir(RESULTS_DIR);
+        const results = [];
+        for (const file of files) {
+            if (file.endsWith('.json')) {
+                const content = await fs.readFile(path.join(RESULTS_DIR, file), 'utf-8');
+                const data = JSON.parse(content);
+                // Return just the summary for listing
+                results.push({
+                    runId: data.runId,
+                    timestamp: data.timestamp,
+                    approach: data.approach,
+                    rps: data.rps,
+                    elapsedSec: data.elapsedSec,
+                    recordsModified: data.recordsModified,
+                    recordsFailed: data.recordsFailed,
+                    successRate: data.successRate,
+                    p95: data.p95,
+                    p99: data.p99
+                });
+            }
+        }
+        // Sort by timestamp desc
+        results.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        res.json(results);
+    } catch (e) {
+        console.error("List Results Error:", e);
+        res.status(500).json({ error: String(e) });
+    }
+});
+
+app.get('/api/results/:id', async (req, res) => {
+    try {
+        const filePath = path.join(RESULTS_DIR, `${req.params.id}.json`);
+        const content = await fs.readFile(filePath, 'utf-8');
+        res.json(JSON.parse(content));
+    } catch (e) {
+        console.error("Get Result Error:", e);
+        res.status(404).json({ error: 'Result not found' });
     }
 });
 

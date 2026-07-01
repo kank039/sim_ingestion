@@ -70,6 +70,9 @@ export async function getDBStats() {
     try {
         const cpuRes = await pool.request().query(cpuQuery);
         const ioRes = await pool.request().query(ioQuery);
+        
+        const waitRes = await pool.request().query(`SELECT count(*) as WaitTasks FROM sys.dm_os_waiting_tasks WHERE session_id > 50;`);
+        const lockRes = await pool.request().query(`SELECT count(*) as ActiveLocks FROM sys.dm_tran_locks WHERE request_session_id > 50 AND request_mode IN ('X', 'U', 'IX');`);
 
         const currentIOMB = ioRes.recordset[0]?.TotalIOMB || 0;
         const now = Date.now();
@@ -87,10 +90,12 @@ export async function getDBStats() {
 
         return {
             cpu: cpuRes.recordset[0]?.SQLProcessUtilization || 0,
-            io: Math.round(deltaMB * 100) / 100 // rounded to 2 decimals
+            io: Math.round(deltaMB * 100) / 100, // rounded to 2 decimals
+            wait_tasks: waitRes.recordset[0]?.WaitTasks || 0,
+            active_locks: lockRes.recordset[0]?.ActiveLocks || 0
         };
     } catch (e) {
         console.error("Failed to get DB stats", e);
-        return { cpu: 0, io: 0 };
+        return { cpu: 0, io: 0, wait_tasks: 0, active_locks: 0 };
     }
 }
