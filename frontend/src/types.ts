@@ -21,6 +21,8 @@ export interface TelemetryPoint {
   recordsInKafka: number;
   lag: number;
   actualRps?: number;
+  consumerE2eLatency?: number;
+  consumerEnrichmentLatency?: number;
 }
 
 export interface SystemLog {

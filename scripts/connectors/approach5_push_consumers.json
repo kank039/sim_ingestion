@@ -6,7 +6,7 @@
     "database.hostname": "sqlserver",
     "database.port": "1433",
     "database.user": "sa",
-    "database.password": "YourStrong!Passw0rd",
+    "database.password": "Password123!",
     "database.names": "sim_db",
     "topic.prefix": "sim",
     "table.include.list": "dbo.billing_record",

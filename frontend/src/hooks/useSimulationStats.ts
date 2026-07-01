@@ -55,7 +55,9 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
                 recordsFailed: data.recordsFailed || 0,
                 recordsInKafka: data.recordsInKafka || 0,
                 lag: data.lag || 0,
-                actualRps
+                actualRps,
+                consumerE2eLatency: data.subscriberStats?.avgE2eLatency || 0,
+                consumerEnrichmentLatency: data.subscriberStats?.avgEnrichmentLatency || 0
               }];
               return newHistory.slice(-3600);
             });

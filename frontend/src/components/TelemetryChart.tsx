@@ -45,6 +45,8 @@ const TelemetryChart: React.FC<TelemetryChartProps> = ({ history, chartSpeed, se
             {selectedChartMetrics && selectedChartMetrics['lag'] && <Line type="monotone" dataKey="lag" name="Pipeline Lag" stroke="#f59e0b" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['recordsFailed'] && <Line type="monotone" dataKey="recordsFailed" name="Failed Records" stroke="#dc2626" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['successRate'] && <Line type="monotone" dataKey="successRate" name="Success Rate (%)" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />}
+            {selectedChartMetrics && selectedChartMetrics['consumerE2eLatency'] && <Line type="monotone" dataKey="consumerE2eLatency" name="Consumer E2E Latency (ms)" stroke="#f472b6" strokeWidth={2} dot={false} isAnimationActive={false} />}
+            {selectedChartMetrics && selectedChartMetrics['consumerEnrichmentLatency'] && <Line type="monotone" dataKey="consumerEnrichmentLatency" name="Consumer Enrichment Latency (ms)" stroke="#a78bfa" strokeWidth={2} dot={false} isAnimationActive={false} />}
             <Brush dataKey="time" height={30} stroke="#3b82f6" />
           </LineChart>
         </ResponsiveContainer>

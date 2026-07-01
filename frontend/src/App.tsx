@@ -61,7 +61,7 @@ function App() {
   const [selectedChartMetrics, setSelectedChartMetrics] = useState<Record<string, boolean>>(() => {
     const saved = localStorage.getItem('selectedChartMetrics');
     return saved ? JSON.parse(saved) : {
-      appLatency: true, cpu: true, io: true, recordsModified: false, recordsInKafka: false, lag: false, recordsFailed: false, successRate: false
+      appLatency: true, cpu: true, io: true, recordsModified: false, recordsInKafka: false, lag: false, recordsFailed: false, successRate: false, consumerE2eLatency: true, consumerEnrichmentLatency: true
     };
   });
 
@@ -289,6 +289,7 @@ function App() {
                     currentStats={currentStats} 
                     selectedChartMetrics={selectedChartMetrics}
                     toggleChartMetric={toggleChartMetric}
+                    subscriberStats={stats?.subscriberStats}
                   />
                 </div>
               )}

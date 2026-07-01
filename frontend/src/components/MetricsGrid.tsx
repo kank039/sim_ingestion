@@ -129,6 +129,7 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
               <div className="stat-label">Messages Consumed</div>
             </div>
             <div className="stat-card" style={{ position: 'relative' }}>
+              {renderCheckbox('consumerEnrichmentLatency')}
               <Zap className="stat-icon" style={{ color: '#a78bfa' }} />
               <div className="stat-value">{subscriberStats.avgEnrichmentLatency} <span className="stat-unit">ms</span></div>
               <div className="stat-label">Enrichment Latency (Avg)</div>
@@ -139,6 +140,7 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
               <div className="stat-label" style={{ marginTop: '0.5rem' }}>Enrichment Percentiles</div>
             </div>
             <div className="stat-card" style={{ position: 'relative' }}>
+              {renderCheckbox('consumerE2eLatency')}
               <Clock className="stat-icon" style={{ color: '#f472b6' }} />
               <div className="stat-value">{subscriberStats.avgE2eLatency} <span className="stat-unit">ms</span></div>
               <div className="stat-label">E2E Latency (CDC → Enrich)</div>
