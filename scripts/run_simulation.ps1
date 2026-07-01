@@ -53,11 +53,21 @@ Write-Host "  1. Database Triggers (DBA Outbox)"
 Write-Host "  2. Transactional Outbox (Recommended)"
 Write-Host "  3. Stream-to-Stream Join (Flink)"
 Write-Host "  4. JDBC SMT (Interceptor)"
+Write-Host "  5. CDC Push + Consumer Enrichment"
 Write-Host ""
 
 $approach = $null
-while ([string]::IsNullOrWhiteSpace($approach) -or $approach -notin 1,2,3,4) {
-    $approach = Read-Host "Select Approach (1-4)"
+while ([string]::IsNullOrWhiteSpace($approach) -or $approach -notin 1,2,3,4,5) {
+    $approach = Read-Host "Select Approach (1-5)"
+}
+
+$numSubscribers = 0
+if ($approach -eq 5) {
+    $numSubscribersStr = $null
+    while ([string]::IsNullOrWhiteSpace($numSubscribersStr) -or -not [int]::TryParse($numSubscribersStr, [ref]$null)) {
+        $numSubscribersStr = Read-Host "Enter Number of Subscribers (e.g. 2)"
+    }
+    $numSubscribers = [int]$numSubscribersStr
 }
 
 $rps = $null
@@ -98,6 +108,7 @@ $body = @{
     rps = [int]$rps
     timeoutMs = [int]$timeoutMs
     insertsOnly = $insertsOnly
+    numSubscribers = [int]$numSubscribers
 } | ConvertTo-Json
 
 try {
@@ -115,8 +126,10 @@ if (-not (Test-Path -Path $outputDir)) {
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $csvFile = "$outputDir\sim_app${approach}_rps${rps}_$timestamp.csv"
 
-$headers = "Time,Approach,RPS,AppLatency(ms),QueueLatency(ms),p95(ms),p99(ms),RecordsModified,RecordsFailed,RecordsInKafka,Lag,DB_CPU,DB_IO,DB_WaitTasks,DB_ActiveLocks,App_CPU,App_Mem,Debezium_CPU,Debezium_Mem,Kafka_CPU,Kafka_Mem"
+$headers = "Time,Approach,RPS,ActualRPS,SuccessRate(%),AppLatency(ms),QueueLatency(ms),p95(ms),p99(ms),RecordsModified,RecordsFailed,RecordsInKafka,Lag,ConsumerE2ELatency(ms),ConsumerEnrichmentLatency(ms),DB_CPU,DB_IO,DB_WaitTasks,DB_ActiveLocks,App_CPU,App_Mem,Debezium_CPU,Debezium_Mem,Kafka_CPU,Kafka_Mem"
 Out-File -FilePath $csvFile -InputObject $headers -Encoding UTF8
+
+$prevRecordsModified = 0
 
 Write-Host "`nSimulation running for $duration seconds. Recording stats per second..." -ForegroundColor Cyan
 Write-Host ""
@@ -150,7 +163,23 @@ for ($i = 0; $i -lt $duration; $i++) {
 
             $time = (Get-Date).ToString("o")
             
-            $row = "$time,$($stats.approach),$($stats.rps),$($stats.appLatency),$($stats.queueLatency),$($stats.p95),$($stats.p99),$($stats.recordsModified),$($stats.recordsFailed),$($stats.recordsInKafka),$($stats.lag),$dbCpu,$dbIo,$dbWaits,$dbLocks,$appCpu,$appMem,$debCpu,$debMem,$kafCpu,$kafMem"
+            $actualRps = [Math]::Max(0, $stats.recordsModified - $prevRecordsModified)
+            $prevRecordsModified = $stats.recordsModified
+            
+            $totalRecords = $stats.recordsModified + $stats.recordsFailed
+            $successRate = 100
+            if ($totalRecords -gt 0) {
+                $successRate = [Math]::Round(($stats.recordsModified / $totalRecords) * 100, 2)
+            }
+
+            $consumerE2ELatency = 0
+            $consumerEnrichmentLatency = 0
+            if ($null -ne $stats.subscriberStats) {
+                $consumerE2ELatency = $stats.subscriberStats.avgE2eLatency
+                $consumerEnrichmentLatency = $stats.subscriberStats.avgEnrichmentLatency
+            }
+
+            $row = "$time,$($stats.approach),$($stats.rps),$actualRps,$successRate,$($stats.appLatency),$($stats.queueLatency),$($stats.p95),$($stats.p99),$($stats.recordsModified),$($stats.recordsFailed),$($stats.recordsInKafka),$($stats.lag),$consumerE2ELatency,$consumerEnrichmentLatency,$dbCpu,$dbIo,$dbWaits,$dbLocks,$appCpu,$appMem,$debCpu,$debMem,$kafCpu,$kafMem"
             
             Add-Content -Path $csvFile -Value $row
             

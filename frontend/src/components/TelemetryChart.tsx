@@ -9,6 +9,41 @@ interface TelemetryChartProps {
   selectedChartMetrics?: Record<string, boolean>;
 }
 
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div style={{ 
+        backgroundColor: 'rgba(17, 17, 17, 0.95)', 
+        border: '1px solid #444', 
+        padding: '12px', 
+        borderRadius: '8px', 
+        color: '#fff', 
+        fontSize: '12px',
+        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.5)',
+        zIndex: 1000
+      }}>
+        <p style={{ margin: '0 0 10px 0', fontWeight: 'bold', borderBottom: '1px solid #444', paddingBottom: '6px' }}>
+          {`Time: ${label}`}
+        </p>
+        <div style={{ 
+          display: 'grid', 
+          gridTemplateColumns: payload.length > 5 ? '1fr 1fr' : '1fr', 
+          columnGap: '20px',
+          rowGap: '6px'
+        }}>
+          {payload.map((entry: any, index: number) => (
+            <div key={`item-${index}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '15px' }}>
+              <span style={{ color: entry.color, whiteSpace: 'nowrap' }}>{entry.name}</span>
+              <span style={{ fontWeight: 'bold' }}>{entry.value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
 const TelemetryChart: React.FC<TelemetryChartProps> = ({ history, chartSpeed, setChartSpeed, selectedChartMetrics }) => {
   const chartData = useMemo(() => {
     switch (chartSpeed) {
@@ -35,7 +70,7 @@ const TelemetryChart: React.FC<TelemetryChartProps> = ({ history, chartSpeed, se
             <CartesianGrid strokeDasharray="3 3" stroke="#333" />
             <XAxis dataKey="time" stroke="#888" />
             <YAxis stroke="#888" />
-            <Tooltip contentStyle={{ backgroundColor: '#111', border: '1px solid #333' }} />
+            <Tooltip content={<CustomTooltip />} />
             <Legend />
             {(!selectedChartMetrics || selectedChartMetrics['appLatency']) && <Line type="monotone" dataKey="appLatency" name="App Latency (ms)" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['actualRps'] && <Line type="monotone" dataKey="actualRps" name="Actual RPS" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />}
