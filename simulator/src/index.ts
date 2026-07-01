@@ -45,14 +45,26 @@ async function getContainerStats() {
                         }
                         
                         let mem = 0;
+                        let cacheMem = 0;
                         if (stat.memory_stats && stat.memory_stats.limit) {
-                            mem = (stat.memory_stats.usage / stat.memory_stats.limit) * 100.0;
+                            let cache = 0;
+                            if (stat.memory_stats.stats) {
+                                if (stat.memory_stats.stats.inactive_file !== undefined) {
+                                    cache = stat.memory_stats.stats.inactive_file;
+                                } else if (stat.memory_stats.stats.cache !== undefined) {
+                                    cache = stat.memory_stats.stats.cache;
+                                }
+                            }
+                            const usedMem = Math.max(0, stat.memory_stats.usage - cache);
+                            mem = (usedMem / stat.memory_stats.limit) * 100.0;
+                            cacheMem = (cache / stat.memory_stats.limit) * 100.0;
                         }
 
                         resolve({
                             name: c.Names[0].replace('/', ''),
                             cpu: cpu.toFixed(2) + '%',
-                            mem: mem.toFixed(2) + '%'
+                            mem: mem.toFixed(2) + '%',
+                            cacheMem: cacheMem.toFixed(2) + '%'
                         });
                     } catch(e) { resolve(null); }
                 });

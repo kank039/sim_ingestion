@@ -2,6 +2,7 @@ export interface ContainerStat {
   name: string;
   cpu: string;
   mem: string;
+  cacheMem?: string;
 }
 
 export interface TelemetryPoint {

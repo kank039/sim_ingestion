@@ -46,10 +46,13 @@ export const SystemHealth: React.FC<SystemHealthProps> = ({ containerStats, reco
                     <div className="health-bar cpu" style={{ width: stat.cpu.replace('%','') + '%' }}></div>
                   </div>
                 </div>
-                <div className="health-bar-container tooltip-trigger" title={`MEM: ${stat.mem}`}>
+                <div className="health-bar-container tooltip-trigger" title={`MEM: ${stat.mem}${stat.cacheMem ? ` | CACHE: ${stat.cacheMem}` : ''}`}>
                   <div className="health-label">MEM</div>
                   <div className="health-bar-track">
                     <div className="health-bar mem" style={{ width: stat.mem.replace('%','') + '%' }}></div>
+                    {stat.cacheMem && (
+                      <div className="health-bar cache" style={{ width: stat.cacheMem.replace('%','') + '%' }}></div>
+                    )}
                   </div>
                 </div>
               </div>

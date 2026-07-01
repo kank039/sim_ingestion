@@ -687,6 +687,7 @@ input[type=range] {
   background: rgba(255,255,255,0.1);
   border-radius: 4px;
   overflow: hidden;
+  display: flex;
 }
 
 .health-bar {
@@ -701,6 +702,11 @@ input[type=range] {
 
 .health-bar.mem {
   background: var(--accent-red);
+}
+
+.health-bar.cache {
+  background: #f59e0b; /* Orange-ish to denote cache */
+  opacity: 0.6;
 }
 
 .tooltip-trigger {
