@@ -46,6 +46,7 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
                 
                 const newHistory = [...prev, {
                   time: new Date().toLocaleTimeString(),
+                  timestamp: Date.now(),
                   appLatency: data.appLatency,
                   queueLatency: data.queueLatency || 0,
                   p95: data.p95 || 0,

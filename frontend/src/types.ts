@@ -8,6 +8,7 @@ export interface ContainerStat {
 
 export interface TelemetryPoint {
   time: string;
+  timestamp: number;
   appLatency: number;
   queueLatency?: number;
   p95?: number;

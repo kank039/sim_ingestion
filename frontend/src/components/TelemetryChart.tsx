@@ -23,7 +23,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
         zIndex: 1000
       }}>
         <p style={{ margin: '0 0 10px 0', fontWeight: 'bold', borderBottom: '1px solid #444', paddingBottom: '6px' }}>
-          {`Time: ${label}`}
+          {`Time: ${typeof label === 'number' ? new Date(label).toLocaleTimeString() : label}`}
         </p>
         <div style={{ 
           display: 'grid', 
@@ -68,7 +68,7 @@ const TelemetryChart: React.FC<TelemetryChartProps> = ({ history, chartSpeed, se
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-            <XAxis dataKey="time" stroke="#888" />
+            <XAxis dataKey="timestamp" stroke="#888" tickFormatter={(val) => new Date(val).toLocaleTimeString()} />
             <YAxis stroke="#888" />
             <Tooltip content={<CustomTooltip />} />
             <Legend />
@@ -86,7 +86,7 @@ const TelemetryChart: React.FC<TelemetryChartProps> = ({ history, chartSpeed, se
             {selectedChartMetrics && selectedChartMetrics['successRate'] && <Line type="monotone" dataKey="successRate" name="Success Rate (%)" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['consumerE2eLatency'] && <Line type="monotone" dataKey="consumerE2eLatency" name="Consumer E2E Latency (ms)" stroke="#f472b6" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['consumerEnrichmentLatency'] && <Line type="monotone" dataKey="consumerEnrichmentLatency" name="Consumer Enrichment Latency (ms)" stroke="#a78bfa" strokeWidth={2} dot={false} isAnimationActive={false} />}
-            <Brush dataKey="time" height={30} stroke="#3b82f6" />
+            <Brush dataKey="timestamp" height={30} stroke="#3b82f6" tickFormatter={(val) => new Date(val).toLocaleTimeString()} />
           </LineChart>
         </ResponsiveContainer>
       </div>

@@ -100,7 +100,7 @@ function App() {
 
   const currentStats = history.length > 0 
     ? history[history.length - 1] 
-    : { time: '', appLatency: 0, cpu: 0, io: 0, recordsModified: 0, recordsFailed: 0, recordsInKafka: 0, lag: 0 };
+    : { time: '', timestamp: 0, appLatency: 0, cpu: 0, io: 0, recordsModified: 0, recordsFailed: 0, recordsInKafka: 0, lag: 0 };
 
   const isRunning = stats?.isRunning || false;
   const isPaused = stats?.isPaused || false;
@@ -312,7 +312,6 @@ function App() {
               <div className="grid-item-health">
                 <SystemHealth 
                   containerStats={stats?.containerStats || []}
-                  dbStats={stats?.dbStats}
                   reconnect={reconnect} 
                   isConnected={isConnected} 
                 />
