@@ -44,13 +44,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
         addActionLog('Stopping simulation...', 'info');
         let res = await fetch(`${API_BASE}/simulate/stop`, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
-        
-        setIsCleaning(true);
-        addActionLog('Cleaning database...', 'info');
-        res = await fetch(`${API_BASE}/simulate/clean`, { method: 'POST' });
-        if (!res.ok) throw new Error(await res.text());
-        setIsCleaning(false);
-        addActionLog('Simulation stopped and cleaned successfully.', 'info');
+        addActionLog('Simulation stopped successfully.', 'info');
       } else {
         addActionLog('Starting simulation...', 'info');
         const res = await fetch(`${API_BASE}/simulate/start`, {
@@ -62,8 +56,21 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
         addActionLog('Simulation started successfully.', 'info');
       }
     } catch (e) {
-      setIsCleaning(false);
       addActionLog(`Action failed: ${String(e)}`, 'error');
+    }
+  };
+
+  const handleClean = async () => {
+    try {
+      setIsCleaning(true);
+      addActionLog('Cleaning database, Kafka topics, and caches...', 'info');
+      const res = await fetch(`${API_BASE}/simulate/clean`, { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text());
+      setIsCleaning(false);
+      addActionLog('System cleaned successfully.', 'info');
+    } catch (e) {
+      setIsCleaning(false);
+      addActionLog(`Clean failed: ${String(e)}`, 'error');
     }
   };
 
@@ -109,7 +116,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     timeoutMs, setTimeoutMs,
     isGradual, setIsGradual,
     isCleaning,
-    updateSim, handleStartStop, handlePause, handleResume,
+    updateSim, handleStartStop, handlePause, handleResume, handleClean,
     isInsertsOnly, setIsInsertsOnly,
     cardinality, setCardinality,
     insertWeight, setInsertWeight,

@@ -46,9 +46,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 }) => {
   const confirmStop = () => {
     if (isRunning) {
-      if (window.confirm("Are you sure you want to stop and clean the database? This is destructive.")) {
-        handleStartStop(true);
-      }
+      handleStartStop(true);
     } else {
       handleStartStop(false);
     }
@@ -145,7 +143,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             setCardinality(v);
             updateSim(approach, rps, isGradual, endRps, isRunning, timeoutMs, isInsertsOnly, v, insertWeight, updateWeight, deleteWeight);
           }}
-          style={{ width: '100%', padding: '4px', background: '#333', color: '#fff', border: '1px solid #555' }}
+          style={{ width: '100%', padding: '0.5rem', backgroundColor: 'rgba(0, 0, 0, 0.2)', color: 'var(--text-main)', border: '1px solid var(--glass-border)', borderRadius: '6px', cursor: 'pointer', outline: 'none', fontSize: '0.85rem' }}
         >
           <option value={100}>100 (High Contention)</option>
           <option value={10000}>10,000 (Medium Contention)</option>
@@ -224,13 +222,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <button 
-          className={`action-btn ${isRunning ? 'stop' : 'start'} ${isCleaning ? 'cleaning' : ''}`} 
+          className={`action-btn ${isRunning ? 'stop' : 'start'}`} 
           style={{ flex: 1 }}
           onClick={confirmStop}
           disabled={isCleaning}
         >
-          {isCleaning ? <><Settings2 size={16} className="spin" /> CLEANING...</> :
-           isRunning ? <><Square size={16} /> STOP SIMULATION</> : 
+          {isRunning ? <><Square size={16} /> STOP SIMULATION</> : 
            <><Play size={16} /> START SIMULATION</>}
         </button>
 
@@ -249,7 +246,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       <div style={{ marginTop: '0.5rem' }}>
         <button
           className="action-btn"
-          style={{ width: '100%', backgroundColor: 'var(--accent-red)', border: '1px solid #7f1d1d' }}
+          style={{ width: '100%', backgroundColor: 'rgba(220, 38, 38, 0.2)', color: '#fca5a5', border: '1px solid rgba(220, 38, 38, 0.5)' }}
           onClick={handleInduceFailure}
           disabled={!isRunning || isCleaning || ![1,3,5].includes(approach)}
         >

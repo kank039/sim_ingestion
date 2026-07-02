@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, LayoutDashboard, Check, Download, FileText } from 'lucide-react';
+import { AlertTriangle, LayoutDashboard, Check, Download, FileText, Network, Trash2 } from 'lucide-react';
 import './App.css';
 
 import { useSimulationStats } from './hooks/useSimulationStats';
@@ -13,6 +13,7 @@ import TelemetryChart from './components/TelemetryChart';
 import { SystemLogs } from './components/SystemLogs';
 import { RunSummaryModal } from './components/RunSummaryModal';
 import { RunHistoryModal } from './components/RunHistoryModal';
+import { DataFlowModal } from './components/DataFlowModal';
 import type { SystemLog } from './types';
 
 
@@ -27,7 +28,7 @@ function App() {
   const {
     approach, setApproach, rps, setRps, endRps, setEndRps,
     timeoutMs, setTimeoutMs,
-    isGradual, setIsGradual, isCleaning, updateSim, handleStartStop, handlePause, handleResume,
+    isGradual, setIsGradual, isCleaning, updateSim, handleStartStop, handlePause, handleResume, handleClean,
     isInsertsOnly, setIsInsertsOnly,
     cardinality, setCardinality,
     insertWeight, setInsertWeight,
@@ -109,6 +110,7 @@ function App() {
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showLogsModal, setShowLogsModal] = useState(false);
+  const [showFlowModal, setShowFlowModal] = useState(false);
   const [lastRunStats, setLastRunStats] = useState<any>(null);
   const [lastRunHistory, setLastRunHistory] = useState<any[]>([]);
   const prevIsRunning = React.useRef(isRunning);
@@ -171,6 +173,14 @@ function App() {
         <div className="header-right">
           <button 
             className="icon-btn" 
+            onClick={() => setShowFlowModal(true)} 
+            title="View Data Flow Architecture"
+            aria-label="View Data Flow Architecture"
+          >
+            <Network size={20} />
+          </button>
+          <button 
+            className="icon-btn" 
             onClick={() => setShowLogsModal(true)} 
             title="View System Logs"
             aria-label="View System Logs"
@@ -192,6 +202,15 @@ function App() {
             aria-label="Download CSV"
           >
             <Download size={20} />
+          </button>
+          <button 
+            className={`icon-btn ${isCleaning ? 'cleaning' : ''}`} 
+            onClick={handleClean} 
+            title="Clean Database & Kafka"
+            aria-label="Clean Database and Kafka"
+            disabled={isRunning || isCleaning}
+          >
+            <Trash2 size={20} className={isCleaning ? 'spin' : ''} />
           </button>
           <div className="status-badge">
             <span style={{ 
@@ -333,6 +352,15 @@ function App() {
             />
           </div>
         </div>
+      )}
+      
+      {showFlowModal && (
+        <DataFlowModal 
+          approach={approach}
+          currentStats={currentStats}
+          subscriberStats={stats?.subscriberStats}
+          onClose={() => setShowFlowModal(false)}
+        />
       )}
 
       {showSummaryModal && lastRunStats && (
