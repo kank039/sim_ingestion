@@ -294,6 +294,24 @@ body {
   box-sizing: border-box;
 }
 
+.dashboard-grid:not(.has-health) {
+  grid-template-columns: 1fr;
+}
+.dashboard-grid:not(.has-health) .grid-item-metrics {
+  grid-column: 1 / -1;
+}
+
+.dashboard-grid:not(.has-metrics) {
+  grid-template-columns: 1fr;
+}
+.dashboard-grid:not(.has-metrics) .grid-item-health {
+  grid-column: 1 / -1;
+}
+
+.dashboard-grid:not(.has-health):not(.has-metrics) .grid-item-telemetry {
+  grid-row: 1 / -1;
+}
+
 .grid-item-metrics {
   grid-column: 1 / 2;
   grid-row: 1 / 2;

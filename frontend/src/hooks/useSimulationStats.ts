@@ -99,14 +99,20 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
     }
   };
 
+  const [isReconnecting, setIsReconnecting] = useState(false);
+
   const reconnect = async () => {
+    if (isReconnecting) return;
     try {
+      setIsReconnecting(true);
       addActionLog('Attempting to reconnect services...', 'info');
       const res = await fetch(`${API_BASE}/system/reconnect`, { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
       addActionLog('Reconnect command sent successfully.', 'info');
     } catch (e) {
       addActionLog(`Reconnect failed: ${String(e)}`, 'error');
+    } finally {
+      setIsReconnecting(false);
     }
   };
 

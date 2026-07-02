@@ -605,7 +605,13 @@ app.post('/api/simulate/clean', async (req, res) => {
     }
 });
 
+let isReconnecting = false;
+
 app.post('/api/system/reconnect', async (req, res) => {
+    if (isReconnecting) {
+        return res.status(409).json({ error: 'Reconnect already in progress' });
+    }
+    isReconnecting = true;
     try {
         addLog('Reconnecting to SQL Server and Kafka...');
         await connectDB();
@@ -615,12 +621,17 @@ app.post('/api/system/reconnect', async (req, res) => {
         for (const worker of workers) {
             worker.postMessage({ type: 'reconnect' });
         }
+        for (const cw of consumerWorkers) {
+            cw.postMessage({ type: 'reconnect' });
+        }
         
         addLog('Successfully reconnected all services.');
         res.json({ message: 'Reconnected' });
     } catch (e) {
         addLog('Error reconnecting: ' + String(e));
         res.status(500).json({ error: String(e) });
+    } finally {
+        isReconnecting = false;
     }
 });
 

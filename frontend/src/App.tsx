@@ -284,7 +284,7 @@ function App() {
             </div>
           )}
 
-          <div className="dashboard-grid">
+          <div className={`dashboard-grid ${visibleComponents['metrics'] ? 'has-metrics' : ''} ${visibleComponents['systemHealth'] ? 'has-health' : ''} ${visibleComponents['telemetry'] ? 'has-telemetry' : ''}`}>
             {visibleComponents['metrics'] && (
               <div className="grid-item-metrics">
                 <MetricsGrid 

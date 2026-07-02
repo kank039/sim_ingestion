@@ -19,11 +19,13 @@ export const SystemHealth: React.FC<SystemHealthProps> = ({ containerStats, reco
           {!isConnected && <span style={{ color: 'var(--accent-red)', fontSize: '0.75rem' }}>● Disconnected</span>}
         </div>
         <button 
-          onClick={reconnect}
+          type="button"
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); reconnect(); }}
           style={{
             background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', 
             padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem',
-            display: 'flex', alignItems: 'center', gap: '4px'
+            display: 'flex', alignItems: 'center', gap: '4px',
+            position: 'relative', zIndex: 10
           }}>
           <Settings2 size={12} /> Reconnect
         </button>
@@ -46,7 +48,9 @@ export const SystemHealth: React.FC<SystemHealthProps> = ({ containerStats, reco
                   <div className="health-bar-track">
                     {stat.cpuCores && stat.cpuCores.length > 0 ? (
                       stat.cpuCores.map((coreUsage, i) => (
-                        <div key={i} className={`health-bar cpu core-${i % 4}`} style={{ width: coreUsage, borderRight: i < stat.cpuCores!.length - 1 && coreUsage !== '0.00%' ? '1px solid rgba(0,0,0,0.2)' : 'none' }}></div>
+                        <div key={i} style={{ flex: 1, borderRight: i < stat.cpuCores!.length - 1 ? '1px solid rgba(0,0,0,0.3)' : 'none', display: 'flex' }}>
+                          <div className={`health-bar cpu core-${i % 4}`} style={{ width: coreUsage, borderRadius: 0 }}></div>
+                        </div>
                       ))
                     ) : (
                       <div className="health-bar cpu" style={{ width: stat.cpu.replace('%','') + '%' }}></div>

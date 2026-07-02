@@ -198,5 +198,21 @@ parentPort?.on('message', async (msg) => {
         } catch (e) {
             console.error(`[Consumer ${workerId}] Cleanup error:`, e);
         }
+    } else if (msg.type === 'reconnect') {
+        try {
+            if (consumer) await consumer.disconnect();
+            if (pool) await pool.close();
+        } catch (e) {
+            console.error(`[Consumer ${workerId}] Cleanup before reconnect error:`, e);
+        }
+        try {
+            await connectDB();
+            await connectKafka();
+            if (isRunning) {
+                await startConsuming();
+            }
+        } catch (e) {
+            console.error(`[Consumer ${workerId}] Reconnect failed:`, e);
+        }
     }
 });
