@@ -285,35 +285,34 @@ function App() {
           )}
 
           <div className="dashboard-grid">
-            <div className="dashboard-main-col">
-              {visibleComponents['metrics'] && (
-                <div className="grid-item-metrics">
-                  <MetricsGrid 
-                    currentStats={currentStats} 
-                    selectedChartMetrics={selectedChartMetrics}
-                    toggleChartMetric={toggleChartMetric}
-                    subscriberStats={stats?.subscriberStats}
-                  />
-                </div>
-              )}
-              {visibleComponents['telemetry'] && (
-                <div className="grid-item-telemetry">
-                  <TelemetryChart 
-                    history={history} 
-                    chartSpeed={chartSpeed} 
-                    setChartSpeed={setChartSpeed} 
-                    selectedChartMetrics={selectedChartMetrics}
-                  />
-                </div>
-              )}
-            </div>
-
+            {visibleComponents['metrics'] && (
+              <div className="grid-item-metrics">
+                <MetricsGrid 
+                  currentStats={currentStats} 
+                  selectedChartMetrics={selectedChartMetrics}
+                  toggleChartMetric={toggleChartMetric}
+                  subscriberStats={stats?.subscriberStats}
+                />
+              </div>
+            )}
+            
             {visibleComponents['systemHealth'] && (
               <div className="grid-item-health">
                 <SystemHealth 
                   containerStats={stats?.containerStats || []}
                   reconnect={reconnect} 
                   isConnected={isConnected} 
+                />
+              </div>
+            )}
+
+            {visibleComponents['telemetry'] && (
+              <div className="grid-item-telemetry">
+                <TelemetryChart 
+                  history={history} 
+                  chartSpeed={chartSpeed} 
+                  setChartSpeed={setChartSpeed} 
+                  selectedChartMetrics={selectedChartMetrics}
                 />
               </div>
             )}

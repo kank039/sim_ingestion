@@ -47,9 +47,9 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 const TelemetryChart: React.FC<TelemetryChartProps> = ({ history, chartSpeed, setChartSpeed, selectedChartMetrics }) => {
   const chartData = useMemo(() => {
     switch (chartSpeed) {
-      case 'fast': return history.slice(-30);
-      case 'normal': return history.slice(-60);
-      case 'slow': return history.slice(-150);
+      case 'fast': return history.slice(-60);
+      case 'normal': return history.slice(-120);
+      case 'slow': return history.slice(-300);
       default: return history;
     }
   }, [history, chartSpeed]);
