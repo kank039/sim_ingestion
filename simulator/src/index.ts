@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
 import { Worker } from 'worker_threads';
-import { connectDB, getDBStats, getPool } from './db';
+import { connectDB, getDBStats, getPool, populateInitialData } from './db';
 import http from 'http';
 import { promisify } from 'util';
 import { Kafka } from 'kafkajs';
@@ -544,22 +544,17 @@ app.post('/api/simulate/clean', async (req, res) => {
         addLog('Cleaning SQL Server records (Truncating)...');
         const pool = getPool();
         await pool.request().query(`
-            EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'billing_record', @capture_instance = N'dbo_billing_record';
-            TRUNCATE TABLE billing_record;
-            EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'billing_record', @role_name = NULL;
-
-            EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'outbox_events', @capture_instance = N'dbo_outbox_events';
-            TRUNCATE TABLE outbox_events;
-            EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'outbox_events', @role_name = NULL;
-
-            EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'cdc_events_shadow', @capture_instance = N'dbo_cdc_events_shadow';
-            TRUNCATE TABLE cdc_events_shadow;
-            EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'cdc_events_shadow', @role_name = NULL;
+            DELETE FROM billing_record;
+            DELETE FROM outbox_events;
+            DELETE FROM cdc_events_shadow;
+            DELETE FROM invoice_batch;
         `);
         
-        // Clean Approach 5 tables (truncate usage, keep reference data)
+        addLog('Repopulating initial invoice_batch data...');
+        await populateInitialData(pool);
+        addLog('Approach 5 subscriber_usage table truncated.');
         try {
-            await pool.request().query(`TRUNCATE TABLE subscriber_usage;`);
+            await pool.request().query(`DELETE FROM subscriber_usage;`);
             addLog('Approach 5 subscriber_usage table truncated.');
         } catch(e) {
             // Table might not exist yet
@@ -574,7 +569,8 @@ app.post('/api/simulate/clean', async (req, res) => {
                 topics: [
                     'sim.sim_db.dbo.billing_record',
                     'sim.sim_db.dbo.outbox_events',
-                    'sim.sim_db.dbo.cdc_events_shadow'
+                    'sim.sim_db.dbo.cdc_events_shadow',
+                    'sim.sim_db.dbo.invoice_batch'
                 ]
             });
         } catch (e) {

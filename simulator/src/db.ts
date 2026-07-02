@@ -40,6 +40,10 @@ export async function connectDB() {
         }
     }
 
+    await populateInitialData(pool);
+}
+
+export async function populateInitialData(pool: sql.ConnectionPool) {
     // Insert some initial data to invoice_batch (ignore errors if other workers are doing it)
     try {
         for (let i = 1; i <= 100; i++) {
