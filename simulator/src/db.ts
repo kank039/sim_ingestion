@@ -1,4 +1,5 @@
 import sql from 'mssql';
+import { initSqlBatches } from './initSql';
 
 const config: sql.config = {
     user: 'sa',
@@ -23,8 +24,22 @@ export async function connectDB() {
     try {
         if (pool) await pool.close();
     } catch(e) {}
-    pool = await sql.connect(config);
-    console.log("Connected to SQL Server");
+    
+    try {
+        pool = await sql.connect(config);
+        console.log("Connected to SQL Server");
+    } catch (e: any) {
+        if (e.code === 'ELOGIN' || e.message?.includes('Login failed')) {
+            console.warn("Database 'sim_db' might not exist. Attempting to initialize it...");
+            await initializeDatabaseAndConnector();
+            // Retry connecting to sim_db after initialization
+            pool = await sql.connect(config);
+            console.log("Connected to SQL Server after initialization");
+        } else {
+            throw e;
+        }
+    }
+
     // Insert some initial data to invoice_batch (ignore errors if other workers are doing it)
     try {
         for (let i = 1; i <= 100; i++) {
@@ -42,6 +57,84 @@ export async function connectDB() {
         `);
     } catch (e) {
         // ignore
+    }
+}
+
+async function initializeDatabaseAndConnector() {
+    const masterConfig = { ...config, database: undefined }; // Connect to default database (master)
+    let tempPool: sql.ConnectionPool | null = null;
+    try {
+        tempPool = await sql.connect(masterConfig);
+        console.log("Connected to master DB. Creating sim_db...");
+        
+        try {
+            await tempPool.request().query(initSqlBatches[0]); // CREATE DATABASE
+        } catch (e: any) {
+            console.log("Database creation skipped or failed:", e.message);
+        }
+
+        await tempPool.close();
+        
+        // Reconnect directly to sim_db to run the rest of the scripts
+        tempPool = await sql.connect(config);
+        console.log("Connected to sim_db. Running initialization scripts...");
+
+        for (let i = 1; i < initSqlBatches.length; i++) {
+            const batch = initSqlBatches[i].trim();
+            if (batch === 'USE sim_db;') continue;
+            try {
+                await tempPool.request().query(batch);
+            } catch (err: any) {
+                console.error("Error executing SQL batch:", err.message);
+            }
+        }
+        console.log("Database initialized successfully.");
+    } catch (err) {
+        console.error("Failed to initialize database:", err);
+        throw err;
+    } finally {
+        if (tempPool) {
+            await tempPool.close();
+        }
+    }
+
+    console.log("Registering Debezium connector...");
+    const debeziumConfig = {
+        name: "billing_record_connector",
+        config: {
+            "connector.class": "io.debezium.connector.sqlserver.SqlServerConnector",
+            "database.hostname": "sqlserver",
+            "database.port": "1433",
+            "database.user": "sa",
+            "database.password": "Password123!",
+            "database.names": "sim_db",
+            "topic.prefix": "sim",
+            "table.include.list": "dbo.billing_record,dbo.invoice_batch,dbo.cdc_events_shadow,dbo.outbox_events",
+            "database.encrypt": "false",
+            "schema.history.internal.kafka.bootstrap.servers": "kafka:29092",
+            "schema.history.internal.kafka.topic": "schema-changes.billing.reset"
+        }
+    };
+
+    try {
+        // First delete it if it exists (ignore errors if it doesn't)
+        await fetch("http://debezium:8083/connectors/billing_record_connector", { method: "DELETE" }).catch(() => {});
+        
+        // Then register it
+        const res = await fetch("http://debezium:8083/connectors", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(debeziumConfig)
+        });
+        
+        if (!res.ok) {
+            const text = await res.text();
+            console.error("Failed to register Debezium connector:", text);
+        } else {
+            console.log("Debezium connector registered successfully.");
+        }
+    } catch (err) {
+        console.error("Failed to communicate with Debezium:", err);
     }
 }
 
