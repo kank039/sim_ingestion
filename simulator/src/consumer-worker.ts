@@ -3,7 +3,8 @@ import sql from 'mssql';
 import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
 
 const workerId: number = workerData?.workerId ?? 0;
-const groupId = `subscriber-worker-${workerId}`;
+const assignedSubscribers: number = workerData?.assignedSubscribers ?? 1;
+const baseSubscriberIndex: number = workerData?.baseSubscriberIndex ?? 0;
 
 const MAX_LATENCY_HISTORY = 500;
 let enrichmentLatencies: number[] = new Array(MAX_LATENCY_HISTORY);
@@ -15,7 +16,7 @@ let enrichmentsFailed = 0;
 
 let isRunning = false;
 let pool: sql.ConnectionPool;
-let consumer: Consumer;
+let consumers: Consumer[] = [];
 
 const dbConfig: sql.config = {
     user: 'sa',
@@ -27,7 +28,7 @@ const dbConfig: sql.config = {
         trustServerCertificate: true
     },
     pool: {
-        max: 5,  // Small pool per consumer worker
+        max: Math.min(50, assignedSubscribers * 5),  // Larger pool to handle concurrent queries from multiple subscribers
         min: 1
     }
 };
@@ -116,10 +117,15 @@ async function connectKafka() {
         brokers: [process.env.KAFKA_BROKERS || 'localhost:9092']
     });
 
-    consumer = kafka.consumer({ groupId });
-    await consumer.connect();
-    await consumer.subscribe({ topic: 'sim.sim_db.dbo.billing_record', fromBeginning: false });
-    console.log(`[Consumer ${workerId}] Kafka consumer connected (group: ${groupId})`);
+    for (let i = 0; i < assignedSubscribers; i++) {
+        const subIndex = baseSubscriberIndex + i;
+        const groupId = `subscriber-${subIndex}`;
+        const consumer = kafka.consumer({ groupId });
+        await consumer.connect();
+        await consumer.subscribe({ topic: 'sim.sim_db.dbo.billing_record', fromBeginning: false });
+        consumers.push(consumer);
+    }
+    console.log(`[Consumer Thread ${workerId}] ${assignedSubscribers} Kafka consumers connected`);
 }
 
 async function handleMessage({ message }: EachMessagePayload) {
@@ -172,9 +178,11 @@ async function handleMessage({ message }: EachMessagePayload) {
 }
 
 async function startConsuming() {
-    await consumer.run({
-        eachMessage: handleMessage
-    });
+    await Promise.all(consumers.map(consumer => 
+        consumer.run({
+            eachMessage: handleMessage
+        })
+    ));
 }
 
 // Listen for messages from main thread
@@ -185,7 +193,7 @@ parentPort?.on('message', async (msg) => {
             await connectDB();
             await connectKafka();
             await startConsuming();
-            parentPort?.postMessage({ type: 'consumer-ready', workerId });
+            parentPort?.postMessage({ type: 'consumer-ready', workerId, assignedSubscribers });
         } catch (e) {
             console.error(`[Consumer ${workerId}] Start failed:`, e);
             parentPort?.postMessage({ type: 'consumer-error', workerId, error: String(e) });
@@ -193,14 +201,16 @@ parentPort?.on('message', async (msg) => {
     } else if (msg.type === 'stop') {
         isRunning = false;
         try {
-            if (consumer) await consumer.disconnect();
+            await Promise.all(consumers.map(c => c.disconnect()));
+            consumers = [];
             if (pool) await pool.close();
         } catch (e) {
             console.error(`[Consumer ${workerId}] Cleanup error:`, e);
         }
     } else if (msg.type === 'reconnect') {
         try {
-            if (consumer) await consumer.disconnect();
+            await Promise.all(consumers.map(c => c.disconnect()));
+            consumers = [];
             if (pool) await pool.close();
         } catch (e) {
             console.error(`[Consumer ${workerId}] Cleanup before reconnect error:`, e);

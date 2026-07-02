@@ -176,16 +176,22 @@ function spawnConsumerWorkers(numSubscribers: number) {
     globalEnrichmentsFailed = 0;
     consumerLatencies.clear();
 
-    for (let i = 0; i < numSubscribers; i++) {
+    const NUM_CONSUMER_WORKER_THREADS = 4;
+    const subscribersPerWorker = Math.ceil(numSubscribers / NUM_CONSUMER_WORKER_THREADS);
+
+    for (let i = 0; i < NUM_CONSUMER_WORKER_THREADS; i++) {
+        let assignedSubscribers = Math.min(subscribersPerWorker, numSubscribers - i * subscribersPerWorker);
+        if (assignedSubscribers <= 0) break;
+
         const worker = new Worker(path.join(__dirname, 'consumer-worker.ts'), {
             execArgv: ['-r', 'ts-node/register'],
-            workerData: { workerId: i }
+            workerData: { workerId: i, assignedSubscribers, baseSubscriberIndex: i * subscribersPerWorker }
         });
 
         worker.on('message', (msg) => {
             if (msg.type === 'consumer-ready') {
-                readyConsumers++;
-                addLog(`Consumer worker ${msg.workerId + 1} ready (${readyConsumers}/${numSubscribers})`);
+                readyConsumers += msg.assignedSubscribers;
+                addLog(`Consumer worker thread ${msg.workerId + 1} ready (${readyConsumers}/${numSubscribers} subscribers connected)`);
             } else if (msg.type === 'consumer-stats') {
                 consumerLatencies.set(msg.workerId, {
                     enrichmentAvg: msg.enrichmentAvg || 0,
@@ -200,19 +206,19 @@ function spawnConsumerWorkers(numSubscribers: number) {
                     globalEnrichmentsFailed += msg.enrichmentsFailed;
                 }
             } else if (msg.type === 'consumer-error') {
-                addLog(`Consumer worker ${msg.workerId + 1} error: ${msg.error}`, 'error');
+                addLog(`Consumer worker thread ${msg.workerId + 1} error: ${msg.error}`, 'error');
             }
         });
 
-        worker.on('error', (err) => console.error(`Consumer worker ${i} error:`, err));
+        worker.on('error', (err) => console.error(`Consumer worker thread ${i} error:`, err));
         consumerWorkers.push(worker);
     }
 
-    // Start all consumer workers
+    // Start all consumer worker threads
     for (const cw of consumerWorkers) {
         cw.postMessage({ type: 'start' });
     }
-    addLog(`Spawned ${numSubscribers} consumer workers for Approach 5`);
+    addLog(`Spawned ${consumerWorkers.length} consumer threads to handle ${numSubscribers} subscribers for Approach 5`);
 }
 
 // Helper: Stop and clean up consumer workers
