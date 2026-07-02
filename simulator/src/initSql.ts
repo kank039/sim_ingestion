@@ -6,7 +6,7 @@ END`,
 
 `USE sim_db;`,
 
-`IF sys.fn_cdc_has_db_access() = 0
+`IF (SELECT is_cdc_enabled FROM sys.databases WHERE name = 'sim_db') = 0
 BEGIN
     EXEC sys.sp_cdc_enable_db;
 END`,
