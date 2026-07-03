@@ -605,6 +605,58 @@ app.post('/api/simulate/clean-cdc', async (req, res) => {
     }
 });
 
+app.post('/api/simulate/clean-kafka', async (req, res) => {
+    try {
+        addLog('Initiating non-destructive Kafka topic purge (retention override)...', 'info');
+        
+        const topics = await admin.listTopics();
+        const simTopics = topics.filter((t: string) => t.startsWith('sim.'));
+        
+        if (simTopics.length > 0) {
+            // Set retention.ms = 1000 for all sim topics
+            const configResources = simTopics.map((topic: string) => ({
+                type: 2, // ConfigResourceTypes.TOPIC
+                name: topic,
+                configEntries: [{ name: 'retention.ms', value: '1000' }]
+            }));
+            
+            await admin.alterConfigs({
+                validateOnly: false,
+                resources: configResources
+            });
+            
+            addLog(`Set retention.ms=1000 on ${simTopics.length} topics. Waiting for log cleaner...`, 'info');
+            
+            // Wait 5 seconds for Kafka log cleaner to purge
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            
+            // Revert retention.ms override (delete config entry)
+            // Kafkajs alterConfigs deletes entries that are omitted or sets them to default? 
+            // Wait, in Kafkajs, we can just delete the config entry.
+            // Actually, in Kafkajs, you can omit the value or set it to the default (e.g., '604800000').
+            const restoreResources = simTopics.map((topic: string) => ({
+                type: 2,
+                name: topic,
+                configEntries: [{ name: 'retention.ms', value: '604800000' }] // 7 days default
+            }));
+            
+            await admin.alterConfigs({
+                validateOnly: false,
+                resources: restoreResources
+            });
+            
+            addLog(`Restored default retention.ms on Kafka topics. Purge complete.`, 'info');
+        } else {
+            addLog('No Kafka topics found to purge.', 'info');
+        }
+
+        res.json({ message: 'Kafka purge completed' });
+    } catch(e) {
+        addLog(`Kafka purge failed: ${String(e)}`, 'error');
+        res.status(500).json({ error: String(e) });
+    }
+});
+
 app.post('/api/simulate/clean', async (req, res) => {
     if (isCleaning) {
         return res.status(409).json({ error: 'Cleanup already in progress' });
@@ -725,9 +777,39 @@ app.get('/api/system/health-check', async (req, res) => {
     try {
         // Check SQL Server
         try {
-            const result = await getPool().request().query('SELECT 1 as alive; SELECT COUNT(*) as count FROM sim_db.cdc.dbo_billing_record_CT;');
+            let expectedTable = '';
+            let ctTableName = 'dbo_billing_record_CT';
+            if (currentApproach === 1) { expectedTable = 'billing_record'; ctTableName = 'dbo_billing_record_CT'; }
+            else if (currentApproach === 2) { expectedTable = 'outbox_events'; ctTableName = 'dbo_outbox_events_CT'; }
+            else if (currentApproach === 3) { expectedTable = 'cdc_events_shadow'; ctTableName = 'dbo_cdc_events_shadow_CT'; }
+            else if (currentApproach === 4) { expectedTable = 'invoice_batch'; ctTableName = 'dbo_invoice_batch_CT'; }
+
+            const query = `
+                SELECT 1 as alive; 
+                SELECT name FROM sys.tables WHERE is_tracked_by_cdc = 1;
+                BEGIN TRY
+                    SELECT COUNT(*) as count FROM sim_db.cdc.${ctTableName};
+                END TRY
+                BEGIN CATCH
+                    SELECT 0 as count;
+                END CATCH
+            `;
+            
+            const result = await getPool().request().query(query);
             health.sqlServer = 'OK';
-            health.cdc_rows = (result.recordsets as any)[1][0].count || 0;
+            health.cdc_rows = (result.recordsets as any)[2]?.[0]?.count || 0;
+            
+            const trackedTables = (result.recordsets as any)[1]?.map((r: any) => r.name) || [];
+            
+            if (expectedTable && !trackedTables.includes(expectedTable)) {
+                health.errors.push(`Configuration Mismatch: Approach ${currentApproach} requires CDC on '${expectedTable}' but it is not enabled.`);
+            }
+            
+            const extraTables = trackedTables.filter((t: string) => t !== expectedTable);
+            if (extraTables.length > 0) {
+                health.errors.push(`Performance Warning: CDC is currently enabled on extra tables (${extraTables.join(', ')}). This causes unnecessary double-writes and wastes SQL Server memory/CPU during Approach ${currentApproach}.`);
+            }
+            
         } catch (e) {
             health.sqlServer = 'ERROR';
             health.errors.push('SQL Server: ' + String(e));

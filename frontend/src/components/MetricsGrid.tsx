@@ -1,6 +1,23 @@
-import React from 'react';
-import { Clock, Cpu, HardDrive, Database, Activity, AlertTriangle, XCircle, Percent, Users, Zap } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Clock, Cpu, HardDrive, Database, Activity, AlertTriangle, XCircle, Percent, Users, Zap, GripHorizontal } from 'lucide-react';
 import type { TelemetryPoint, SubscriberStats } from '../types';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import type { DragEndEvent } from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  rectSortingStrategy,
+  useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 const METRIC_DESCRIPTIONS: Record<string, string> = {
   actualRps: "What it is: The actual Requests Per Second being processed.\nImportance: Shows real throughput compared to target.",
@@ -26,12 +43,64 @@ const METRIC_DESCRIPTIONS: Record<string, string> = {
   enrichmentsFailed: "What it is: Number of consumer enrichments that failed.\nImportance: Indicates read-side database errors or lock timeouts."
 };
 
+const DEFAULT_MAIN_ORDER = [
+  'actualRps', 'appLatency', 'queueLatency', 'percentiles', 'cpu', 'io', 
+  'wait_tasks', 'active_locks', 'recordsModified', 'recordsInKafka', 
+  'lag', 'recordsFailed', 'recordsLate', 'slaRate', 'successRate'
+];
+
+const DEFAULT_SUBSCRIBER_ORDER = [
+  'numSubscribers', 'totalMessagesConsumed', 'consumerEnrichmentLatency', 
+  'percentilesEnrichment', 'consumerE2eLatency', 'enrichmentsFailed'
+];
+
 interface MetricsGridProps {
   currentStats: TelemetryPoint;
   selectedChartMetrics?: Record<string, boolean>;
   toggleChartMetric?: (id: string) => void;
   subscriberStats?: SubscriberStats;
 }
+
+const SortableMetricCard = ({ id, content, title, renderCheckbox, cardStyle }: any) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const style = {
+    ...cardStyle,
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : 1,
+    opacity: isDragging ? 0.8 : 1,
+    position: 'relative' as const,
+    cursor: 'default',
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="stat-card"
+      title={title}
+    >
+      <div 
+        {...attributes} 
+        {...listeners} 
+        style={{ position: 'absolute', top: '8px', left: '8px', cursor: 'grab', opacity: 0.3, zIndex: 2 }}
+        className="drag-handle"
+      >
+        <GripHorizontal size={16} />
+      </div>
+      {renderCheckbox(id)}
+      {content}
+    </div>
+  );
+};
 
 export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selectedChartMetrics, toggleChartMetric, subscriberStats }) => {
   const totalRecords = (currentStats.recordsModified || 0) + (currentStats.recordsFailed || 0) + (currentStats.recordsLate || 0);
@@ -44,8 +113,11 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
 
   const renderCheckbox = (id: string) => {
     if (!selectedChartMetrics || !toggleChartMetric) return null;
+    // Don't render checkbox if it's not a chartable metric (percentiles)
+    if (id === 'percentiles' || id === 'percentilesEnrichment') return null;
+    
     return (
-      <div style={{ position: 'absolute', top: '8px', right: '8px' }}>
+      <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 2 }}>
         <input 
           type="checkbox" 
           checked={selectedChartMetrics[id] || false} 
@@ -57,139 +129,352 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
     );
   };
 
-  return (
-    <div className="glass-panel stats-grid-container">
-      <div className="stats-grid">
-        <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.actualRps}>
-          {renderCheckbox('actualRps')}
+  const mainConfigs: Record<string, any> = {
+    actualRps: {
+      content: (
+        <>
           <Activity className="stat-icon" style={{ color: 'var(--accent-green)' }} />
           <div className="stat-value">{currentStats.actualRps || 0}</div>
           <div className="stat-label">Actual RPS</div>
-        </div>
-        <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.appLatency}>
-          {renderCheckbox('appLatency')}
+        </>
+      ),
+      style: {}
+    },
+    appLatency: {
+      content: (
+        <>
           <Clock className="stat-icon" />
           <div className="stat-value">{currentStats.appLatency} <span className="stat-unit">ms</span></div>
           <div className="stat-label">DB Latency (Avg)</div>
-        </div>
-        <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.queueLatency}>
-          {renderCheckbox('queueLatency')}
+        </>
+      ),
+      style: {}
+    },
+    queueLatency: {
+      content: (
+        <>
           <Clock className="stat-icon" style={{ color: 'var(--accent-orange)' }} />
           <div className="stat-value">{currentStats.queueLatency || 0} <span className="stat-unit">ms</span></div>
           <div className="stat-label">Queue Latency</div>
-        </div>
-        <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.percentiles}>
+        </>
+      ),
+      style: {}
+    },
+    percentiles: {
+      content: (
+        <>
           <div className="stat-value" style={{ fontSize: '1rem', marginTop: '0.5rem' }}>p95: {currentStats.p95 || 0}ms</div>
           <div className="stat-value" style={{ fontSize: '1rem', marginTop: '0.25rem' }}>p99: {currentStats.p99 || 0}ms</div>
           <div className="stat-label" style={{ marginTop: '0.5rem' }}>Percentiles</div>
-        </div>
-        <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.cpu}>
-          {renderCheckbox('cpu')}
+        </>
+      ),
+      style: {}
+    },
+    cpu: {
+      content: (
+        <>
           <Cpu className="stat-icon" />
           <div className="stat-value">{currentStats.cpu} <span className="stat-unit">%</span></div>
           <div className="stat-label">SQL Server CPU <span style={{ fontSize: '0.75em', opacity: 0.7 }}>(1m)</span></div>
-        </div>
-        <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.io}>
-          {renderCheckbox('io')}
+        </>
+      ),
+      style: {}
+    },
+    io: {
+      content: (
+        <>
           <HardDrive className="stat-icon" />
           <div className="stat-value">{currentStats.io} <span className="stat-unit">MB/s</span></div>
           <div className="stat-label">SQL Server I/O</div>
-        </div>
-        <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.wait_tasks}>
-          {renderCheckbox('wait_tasks')}
+        </>
+      ),
+      style: {}
+    },
+    wait_tasks: {
+      content: (
+        <>
           <Database className="stat-icon" style={{ color: currentStats.wait_tasks && currentStats.wait_tasks > 10 ? 'var(--accent-red)' : 'inherit' }} />
           <div className="stat-value">{currentStats.wait_tasks || 0}</div>
           <div className="stat-label">DB Wait Tasks</div>
-        </div>
-        <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.active_locks}>
-          {renderCheckbox('active_locks')}
+        </>
+      ),
+      style: {}
+    },
+    active_locks: {
+      content: (
+        <>
           <Database className="stat-icon" />
           <div className="stat-value">{currentStats.active_locks || 0}</div>
           <div className="stat-label">Active DB Locks</div>
-        </div>
-        <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.recordsModified}>
-          {renderCheckbox('recordsModified')}
+        </>
+      ),
+      style: {}
+    },
+    recordsModified: {
+      content: (
+        <>
           <Database className="stat-icon" />
           <div className="stat-value">{currentStats.recordsModified}</div>
           <div className="stat-label">Records Modified</div>
-        </div>
-        <div className="stat-card" style={{ color: 'var(--accent-blue)', position: 'relative' }} title={METRIC_DESCRIPTIONS.recordsInKafka}>
-          {renderCheckbox('recordsInKafka')}
+        </>
+      ),
+      style: {}
+    },
+    recordsInKafka: {
+      content: (
+        <>
           <Activity className="stat-icon" />
           <div className="stat-value">{currentStats.recordsInKafka}</div>
           <div className="stat-label">Records in Kafka</div>
-        </div>
-        <div className="stat-card" style={{ color: currentStats.lag > 1000 ? 'var(--accent-red)' : 'var(--accent-green)', position: 'relative' }} title={METRIC_DESCRIPTIONS.lag}>
-          {renderCheckbox('lag')}
+        </>
+      ),
+      style: { color: 'var(--accent-blue)' }
+    },
+    lag: {
+      content: (
+        <>
           <AlertTriangle className="stat-icon" />
           <div className="stat-value">{currentStats.lag}</div>
           <div className="stat-label">Pipeline Lag</div>
-        </div>
-        <div className="stat-card" style={{ color: currentStats.recordsFailed > 0 ? 'var(--accent-red)' : 'inherit', position: 'relative' }} title={METRIC_DESCRIPTIONS.recordsFailed}>
-          {renderCheckbox('recordsFailed')}
+        </>
+      ),
+      style: { color: currentStats.lag > 1000 ? 'var(--accent-red)' : 'var(--accent-green)' }
+    },
+    recordsFailed: {
+      content: (
+        <>
           <XCircle className="stat-icon" />
           <div className="stat-value">{currentStats.recordsFailed || 0}</div>
           <div className="stat-label">Failed Records</div>
-        </div>
-        <div className="stat-card" style={{ color: (currentStats.recordsLate || 0) > 0 ? '#fbbf24' : 'inherit', position: 'relative' }} title={METRIC_DESCRIPTIONS.recordsLate}>
-          {renderCheckbox('recordsLate')}
+        </>
+      ),
+      style: { color: currentStats.recordsFailed > 0 ? 'var(--accent-red)' : 'inherit' }
+    },
+    recordsLate: {
+      content: (
+        <>
           <Clock className="stat-icon" />
           <div className="stat-value">{currentStats.recordsLate || 0}</div>
           <div className="stat-label">Late Records</div>
-        </div>
-        <div className="stat-card" style={{ color: parseFloat(slaRate as string) < 99 ? 'var(--accent-red)' : 'var(--accent-green)', position: 'relative' }} title={METRIC_DESCRIPTIONS.slaRate}>
-          {renderCheckbox('slaRate')}
+        </>
+      ),
+      style: { color: (currentStats.recordsLate || 0) > 0 ? '#fbbf24' : 'inherit' }
+    },
+    slaRate: {
+      content: (
+        <>
           <Percent className="stat-icon" />
           <div className="stat-value">{slaRate} <span className="stat-unit">%</span></div>
           <div className="stat-label">SLA %</div>
-        </div>
-        <div className="stat-card" style={{ color: parseFloat(successRate as string) < 99 ? 'var(--accent-red)' : 'var(--accent-green)', position: 'relative' }} title={METRIC_DESCRIPTIONS.successRate}>
-          {renderCheckbox('successRate')}
+        </>
+      ),
+      style: { color: parseFloat(slaRate as string) < 99 ? 'var(--accent-red)' : 'var(--accent-green)' }
+    },
+    successRate: {
+      content: (
+        <>
           <Percent className="stat-icon" />
           <div className="stat-value">{successRate} <span className="stat-unit">%</span></div>
           <div className="stat-label">Success %</div>
+        </>
+      ),
+      style: { color: parseFloat(successRate as string) < 99 ? 'var(--accent-red)' : 'var(--accent-green)' }
+    }
+  };
+
+  const subscriberConfigs: Record<string, any> = subscriberStats ? {
+    numSubscribers: {
+      content: (
+        <>
+          <Users className="stat-icon" style={{ color: 'var(--accent-blue)' }} />
+          <div className="stat-value">{subscriberStats.numSubscribers}</div>
+          <div className="stat-label">Active Subscribers</div>
+        </>
+      ),
+      style: {}
+    },
+    totalMessagesConsumed: {
+      content: (
+        <>
+          <Activity className="stat-icon" style={{ color: 'var(--accent-green)' }} />
+          <div className="stat-value">{subscriberStats.totalMessagesConsumed.toLocaleString()}</div>
+          <div className="stat-label">Messages Consumed</div>
+        </>
+      ),
+      style: {}
+    },
+    consumerEnrichmentLatency: {
+      content: (
+        <>
+          <Zap className="stat-icon" style={{ color: '#a78bfa' }} />
+          <div className="stat-value">{subscriberStats.avgEnrichmentLatency} <span className="stat-unit">ms</span></div>
+          <div className="stat-label">Enrichment Latency (Avg)</div>
+        </>
+      ),
+      style: {}
+    },
+    percentilesEnrichment: {
+      content: (
+        <>
+          <div className="stat-value" style={{ fontSize: '1rem', marginTop: '0.5rem' }}>p95: {subscriberStats.p95EnrichmentLatency}ms</div>
+          <div className="stat-value" style={{ fontSize: '1rem', marginTop: '0.25rem' }}>p99: {subscriberStats.p99EnrichmentLatency}ms</div>
+          <div className="stat-label" style={{ marginTop: '0.5rem' }}>Enrichment Percentiles</div>
+        </>
+      ),
+      style: {}
+    },
+    consumerE2eLatency: {
+      content: (
+        <>
+          <Clock className="stat-icon" style={{ color: '#f472b6' }} />
+          <div className="stat-value">{subscriberStats.avgE2eLatency} <span className="stat-unit">ms</span></div>
+          <div className="stat-label">E2E Latency (CDC → Enrich)</div>
+        </>
+      ),
+      style: {}
+    },
+    enrichmentsFailed: {
+      content: (
+        <>
+          <XCircle className="stat-icon" />
+          <div className="stat-value">{subscriberStats.enrichmentsFailed}</div>
+          <div className="stat-label">Enrichments Failed</div>
+        </>
+      ),
+      style: { color: subscriberStats.enrichmentsFailed > 0 ? 'var(--accent-red)' : 'inherit' }
+    }
+  } : {};
+
+  // Load saved order from localStorage or fallback to default
+  const [mainOrder, setMainOrder] = useState<string[]>(() => {
+    const saved = localStorage.getItem('metricsGridMainOrder');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length === DEFAULT_MAIN_ORDER.length) {
+          return parsed;
+        }
+      } catch (e) {}
+    }
+    return DEFAULT_MAIN_ORDER;
+  });
+
+  const [subscriberOrder, setSubscriberOrder] = useState<string[]>(() => {
+    const saved = localStorage.getItem('metricsGridSubscriberOrder');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length === DEFAULT_SUBSCRIBER_ORDER.length) {
+          return parsed;
+        }
+      } catch (e) {}
+    }
+    return DEFAULT_SUBSCRIBER_ORDER;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('metricsGridMainOrder', JSON.stringify(mainOrder));
+  }, [mainOrder]);
+
+  useEffect(() => {
+    localStorage.setItem('metricsGridSubscriberOrder', JSON.stringify(subscriberOrder));
+  }, [subscriberOrder]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEndMain = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setMainOrder((items) => {
+        const oldIndex = items.indexOf(active.id as string);
+        const newIndex = items.indexOf(over.id as string);
+        return arrayMove(items, oldIndex, newIndex);
+      });
+    }
+  };
+
+  const handleDragEndSubscriber = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setSubscriberOrder((items) => {
+        const oldIndex = items.indexOf(active.id as string);
+        const newIndex = items.indexOf(over.id as string);
+        return arrayMove(items, oldIndex, newIndex);
+      });
+    }
+  };
+
+  return (
+    <div className="glass-panel stats-grid-container">
+      <DndContext 
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEndMain}
+      >
+        <div className="stats-grid">
+          <SortableContext 
+            items={mainOrder}
+            strategy={rectSortingStrategy}
+          >
+            {mainOrder.map((id) => {
+              const config = mainConfigs[id];
+              if (!config) return null;
+              return (
+                <SortableMetricCard
+                  key={id}
+                  id={id}
+                  title={METRIC_DESCRIPTIONS[id]}
+                  content={config.content}
+                  cardStyle={config.style}
+                  renderCheckbox={renderCheckbox}
+                />
+              );
+            })}
+          </SortableContext>
         </div>
-      </div>
+      </DndContext>
 
       {subscriberStats && (
         <>
           <div style={{ padding: '0.75rem 1rem 0.25rem', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#888', fontWeight: 600 }}>
             Subscriber / Consumer Metrics
           </div>
-          <div className="stats-grid">
-            <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.numSubscribers}>
-              <Users className="stat-icon" style={{ color: 'var(--accent-blue)' }} />
-              <div className="stat-value">{subscriberStats.numSubscribers}</div>
-              <div className="stat-label">Active Subscribers</div>
+          <DndContext 
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEndSubscriber}
+          >
+            <div className="stats-grid">
+              <SortableContext 
+                items={subscriberOrder}
+                strategy={rectSortingStrategy}
+              >
+                {subscriberOrder.map((id) => {
+                  const config = subscriberConfigs[id];
+                  if (!config) return null;
+                  return (
+                    <SortableMetricCard
+                      key={id}
+                      id={id}
+                      title={METRIC_DESCRIPTIONS[id]}
+                      content={config.content}
+                      cardStyle={config.style}
+                      renderCheckbox={renderCheckbox}
+                    />
+                  );
+                })}
+              </SortableContext>
             </div>
-            <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.totalMessagesConsumed}>
-              <Activity className="stat-icon" style={{ color: 'var(--accent-green)' }} />
-              <div className="stat-value">{subscriberStats.totalMessagesConsumed.toLocaleString()}</div>
-              <div className="stat-label">Messages Consumed</div>
-            </div>
-            <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.consumerEnrichmentLatency}>
-              {renderCheckbox('consumerEnrichmentLatency')}
-              <Zap className="stat-icon" style={{ color: '#a78bfa' }} />
-              <div className="stat-value">{subscriberStats.avgEnrichmentLatency} <span className="stat-unit">ms</span></div>
-              <div className="stat-label">Enrichment Latency (Avg)</div>
-            </div>
-            <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.percentilesEnrichment}>
-              <div className="stat-value" style={{ fontSize: '1rem', marginTop: '0.5rem' }}>p95: {subscriberStats.p95EnrichmentLatency}ms</div>
-              <div className="stat-value" style={{ fontSize: '1rem', marginTop: '0.25rem' }}>p99: {subscriberStats.p99EnrichmentLatency}ms</div>
-              <div className="stat-label" style={{ marginTop: '0.5rem' }}>Enrichment Percentiles</div>
-            </div>
-            <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.consumerE2eLatency}>
-              {renderCheckbox('consumerE2eLatency')}
-              <Clock className="stat-icon" style={{ color: '#f472b6' }} />
-              <div className="stat-value">{subscriberStats.avgE2eLatency} <span className="stat-unit">ms</span></div>
-              <div className="stat-label">E2E Latency (CDC → Enrich)</div>
-            </div>
-            <div className="stat-card" style={{ color: subscriberStats.enrichmentsFailed > 0 ? 'var(--accent-red)' : 'inherit', position: 'relative' }} title={METRIC_DESCRIPTIONS.enrichmentsFailed}>
-              <XCircle className="stat-icon" />
-              <div className="stat-value">{subscriberStats.enrichmentsFailed}</div>
-              <div className="stat-label">Enrichments Failed</div>
-            </div>
-          </div>
+          </DndContext>
         </>
       )}
     </div>

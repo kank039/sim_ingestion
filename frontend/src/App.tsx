@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, LayoutDashboard, Check, Download, FileText, Network, Trash2, Activity, Eraser } from 'lucide-react';
+import { AlertTriangle, LayoutDashboard, Check, Download, FileText, Network, Trash2, Activity, Eraser, Wind } from 'lucide-react';
 import './App.css';
 
 import { useSimulationStats } from './hooks/useSimulationStats';
@@ -28,7 +28,7 @@ function App() {
   const {
     approach, setApproach, rps, setRps, endRps, setEndRps,
     timeoutMs, setTimeoutMs,
-    isGradual, setIsGradual, isCleaning, isCheckingHealth, updateSim, handleStartStop, handlePause, handleResume, handleClean, handleHealthCheck, handleCleanCdc,
+    isGradual, setIsGradual, isCleaning, isCheckingHealth, updateSim, handleStartStop, handlePause, handleResume, handleClean, handleHealthCheck, handleCleanCdc, handleCleanKafka,
     isInsertsOnly, setIsInsertsOnly,
     cardinality, setCardinality,
     insertWeight, setInsertWeight,
@@ -229,6 +229,15 @@ function App() {
             disabled={isRunning}
           >
             <Eraser size={20} />
+          </button>
+          <button 
+            className="icon-btn" 
+            onClick={handleCleanKafka} 
+            title="Clear Kafka Topics"
+            aria-label="Clear Kafka Topics"
+            disabled={isRunning}
+          >
+            <Wind size={20} />
           </button>
           <div className="status-badge">
             <span style={{ 

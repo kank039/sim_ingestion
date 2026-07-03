@@ -106,6 +106,17 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     }
   };
 
+  const handleCleanKafka = async () => {
+    try {
+      addActionLog('Purging Kafka topics (retention override)...', 'info');
+      const res = await fetch(`${API_BASE}/simulate/clean-kafka`, { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text());
+      addActionLog('Kafka topics purged successfully.', 'info');
+    } catch (e) {
+      addActionLog(`Kafka purge failed: ${String(e)}`, 'error');
+    }
+  };
+
   const handlePause = async () => {
     try {
       addActionLog('Pausing simulation...', 'info');
@@ -150,7 +161,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     setIsGradual,
     isCleaning,
     isCheckingHealth,
-    updateSim, handleStartStop, handlePause, handleResume, handleClean, handleHealthCheck, handleCleanCdc,
+    updateSim, handleStartStop, handlePause, handleResume, handleClean, handleHealthCheck, handleCleanCdc, handleCleanKafka,
     isInsertsOnly, setIsInsertsOnly,
     cardinality, setCardinality,
     insertWeight, setInsertWeight,
