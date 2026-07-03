@@ -76,7 +76,7 @@ services:
       resources:
         limits:
           cpus: '1.5'
-          memory: 1536M
+          memory: 4096M
     networks:
       - sim_network
     healthcheck:

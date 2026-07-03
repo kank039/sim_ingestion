@@ -129,6 +129,7 @@ let globalRecordsFailed = 0;
 let globalRecordsLate = 0;
 let baselineKafkaOffset = 0;
 let globalCaptureLagMs = 0;
+let isCleaning = false;
 
 let gradualInterval: NodeJS.Timeout | null = null;
 
@@ -333,6 +334,7 @@ app.get('/api/stats', async (req, res) => {
             elapsedSec,
             isRunning,
             isPaused,
+            isCleaning,
             approach: currentApproach,
             rps: currentRps,
             appLatency: Math.round(avgLatency),
@@ -356,7 +358,10 @@ app.get('/api/stats', async (req, res) => {
     }
 });
 
-app.post('/api/simulate/start', (req, res) => {
+app.post('/api/simulate/start', async (req, res) => {
+    if (isCleaning) {
+        return res.status(409).json({ error: 'Cannot start simulation while cleanup is in progress' });
+    }
     const { approach, rps, gradual, endRps, timeoutMs, insertsOnly, cardinality, insertWeight, updateWeight, deleteWeight, numSubscribers } = req.body;
     currentApproach = approach;
     currentRps = rps;
@@ -366,6 +371,14 @@ app.post('/api/simulate/start', (req, res) => {
     globalRecordsModified = 0;
     globalRecordsFailed = 0;
     globalRecordsLate = 0;
+    
+    // Reset baseline offset so Kafka records start at 0 for this run
+    try {
+        const offsets = await admin.fetchTopicOffsets('sim.sim_db.dbo.billing_record');
+        baselineKafkaOffset = offsets.reduce((sum, partition) => sum + parseInt(partition.high, 10), 0);
+    } catch (e) {
+        baselineKafkaOffset = 0;
+    }
     
     currentRunId = Date.now().toString();
     runStartTime = Date.now();
@@ -553,42 +566,62 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/api/simulate/clean', async (req, res) => {
+    if (isCleaning) {
+        return res.status(409).json({ error: 'Cleanup already in progress' });
+    }
+    isCleaning = true;
     try {
         addLog('Cleaning SQL Server records (Truncating)...');
         const pool = getPool();
-        await pool.request().query(`
-            DELETE FROM billing_record;
-            DELETE FROM outbox_events;
-            DELETE FROM cdc_events_shadow;
-            DELETE FROM invoice_batch;
-        `);
+        const tables = ['billing_record', 'outbox_events', 'cdc_events_shadow', 'invoice_batch'];
+        for (const table of tables) {
+            let rowsAffected = 5000;
+            while (rowsAffected >= 5000) {
+                const result = await pool.request().query(`DELETE TOP (5000) FROM ${table}`);
+                rowsAffected = result.rowsAffected[0] || 0;
+            }
+        }
         
         addLog('Repopulating initial invoice_batch data...');
         await populateInitialData(pool);
-        addLog('Approach 5 subscriber_usage table truncated.');
+        
         try {
-            await pool.request().query(`DELETE FROM subscriber_usage;`);
+            let rowsAffected = 5000;
+            while (rowsAffected >= 5000) {
+                const result = await pool.request().query(`DELETE TOP (5000) FROM subscriber_usage`);
+                rowsAffected = result.rowsAffected[0] || 0;
+            }
             addLog('Approach 5 subscriber_usage table truncated.');
         } catch(e) {
             // Table might not exist yet
         }
         
-        addLog('Waiting for Debezium to recognize changes...');
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        addLog('Waiting for Debezium to recognize and process deletes...');
+        let stableCount = 0;
+        let lastOffset = -1;
         
-        try {
-            addLog('Wiping Kafka topics...');
-            await admin.deleteTopics({
-                topics: [
-                    'sim.sim_db.dbo.billing_record',
-                    'sim.sim_db.dbo.outbox_events',
-                    'sim.sim_db.dbo.cdc_events_shadow',
-                    'sim.sim_db.dbo.invoice_batch'
-                ]
-            });
-        } catch (e) {
-            console.log('Topic deletion skipped/failed: ', e);
-            addLog('Kafka topics wiped or ignored.');
+        // Wait up to 60 seconds for Debezium to process the backlog of deletes
+        for (let i = 0; i < 60; i++) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            try {
+                const offsets = await admin.fetchTopicOffsets('sim.sim_db.dbo.billing_record');
+                const currentOffset = offsets.reduce((sum, partition) => sum + parseInt(partition.high, 10), 0);
+                
+                if (currentOffset === lastOffset) {
+                    stableCount++;
+                    if (stableCount >= 2) {
+                        baselineKafkaOffset = currentOffset;
+                        break;
+                    }
+                } else {
+                    stableCount = 0;
+                    lastOffset = currentOffset;
+                    baselineKafkaOffset = currentOffset;
+                }
+            } catch(e) {
+                baselineKafkaOffset = 0;
+                break;
+            }
         }
         
         globalRecordsModified = 0;
@@ -596,22 +629,16 @@ app.post('/api/simulate/clean', async (req, res) => {
         globalRecordsLate = 0;
         globalMessagesConsumed = 0;
         globalEnrichmentsFailed = 0;
-        baselineKafkaOffset = 0;
         
-        // Wait 2 seconds for topics to be deleted, then fetch offsets to set as baseline (in case of recreation)
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        try {
-            const offsets = await admin.fetchTopicOffsets('sim.sim_db.dbo.billing_record');
-            baselineKafkaOffset = offsets.reduce((sum, partition) => sum + parseInt(partition.high, 10), 0);
-        } catch(e) {
-            baselineKafkaOffset = 0; // topic doesn't exist yet
-        }
+        addLog(`Kafka baseline offset stabilized at ${baselineKafkaOffset}.`);
         
         addLog('System perfectly cleaned.');
         res.json({ message: 'Cleaned' });
     } catch (e) {
         addLog('Error cleaning: ' + String(e));
         res.status(500).json({ error: String(e) });
+    } finally {
+        isCleaning = false;
     }
 });
 
