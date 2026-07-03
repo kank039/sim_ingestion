@@ -130,6 +130,7 @@ let globalRecordsLate = 0;
 let baselineKafkaOffset = 0;
 let globalCaptureLagMs = 0;
 let isCleaning = false;
+let globalFlawAlert: string | null = null;
 
 let gradualInterval: NodeJS.Timeout | null = null;
 
@@ -295,9 +296,13 @@ app.get('/api/stats', async (req, res) => {
         }
         
         const lag = Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset));
-        let flawAlert = null;
-        if (currentApproach === 4 && lag > 0) {
-            flawAlert = "RACE CONDITION DETECTED: SMT queried old data for rapid sequential updates.";
+        
+        if (!globalFlawAlert && lag > Math.max(currentRps * 10, 5000)) {
+            if (currentApproach === 4) {
+                globalFlawAlert = "RACE CONDITION DETECTED: SMT queried old data for rapid sequential updates.";
+            } else {
+                globalFlawAlert = "PIPELINE FLAW DETECTED: CDC pipeline unable to keep up with mutation rate.";
+            }
         }
         
         let totalLatency = 0;
@@ -341,7 +346,7 @@ app.get('/api/stats', async (req, res) => {
             queueLatency: Math.round(avgQueue),
             p95: Math.round(p95),
             p99: Math.round(p99),
-            flawAlert,
+            flawAlert: globalFlawAlert,
             dbStats,
             containerStats,
             recordsModified: globalRecordsModified,
@@ -371,6 +376,7 @@ app.post('/api/simulate/start', async (req, res) => {
     globalRecordsModified = 0;
     globalRecordsFailed = 0;
     globalRecordsLate = 0;
+    globalFlawAlert = null;
     
     // Reset baseline offset so Kafka records start at 0 for this run
     try {
@@ -488,9 +494,13 @@ setInterval(async () => {
         } catch(e) {}
         
         const lag = Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset));
-        let flawAlert = null;
-        if (currentApproach === 4 && lag > 0) {
-            flawAlert = "RACE CONDITION DETECTED: SMT queried old data for rapid sequential updates.";
+        
+        if (!globalFlawAlert && lag > Math.max(currentRps * 10, 5000)) {
+            if (currentApproach === 4) {
+                globalFlawAlert = "RACE CONDITION DETECTED: SMT queried old data for rapid sequential updates.";
+            } else {
+                globalFlawAlert = "PIPELINE FLAW DETECTED: CDC pipeline unable to keep up with mutation rate.";
+            }
         }
         
         let totalLatency = 0;
@@ -540,7 +550,7 @@ setInterval(async () => {
                 queueLatency: Math.round(avgQueue),
                 p95: Math.round(p95),
                 p99: Math.round(p99),
-                flawAlert,
+                flawAlert: globalFlawAlert,
                 dbStats,
                 containerStats,
                 recordsModified: globalRecordsModified,
@@ -629,6 +639,7 @@ app.post('/api/simulate/clean', async (req, res) => {
         globalRecordsLate = 0;
         globalMessagesConsumed = 0;
         globalEnrichmentsFailed = 0;
+        globalFlawAlert = null;
         
         addLog(`Kafka baseline offset stabilized at ${baselineKafkaOffset}.`);
         
