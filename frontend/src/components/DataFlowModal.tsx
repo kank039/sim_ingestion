@@ -11,7 +11,7 @@ interface DataFlowModalProps {
 }
 
 export const DataFlowModal: React.FC<DataFlowModalProps> = ({ approach, currentStats, subscriberStats, onClose }) => {
-  const totalRecords = (currentStats.recordsModified || 0) + (currentStats.recordsFailed || 0);
+  const totalRecords = (currentStats.recordsModified || 0) + (currentStats.recordsFailed || 0) + (currentStats.recordsLate || 0);
   const successRate = totalRecords > 0 
     ? ((currentStats.recordsModified / totalRecords) * 100).toFixed(2) 
     : '100.00';

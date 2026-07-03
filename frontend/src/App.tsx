@@ -63,7 +63,7 @@ function App() {
   const [selectedChartMetrics, setSelectedChartMetrics] = useState<Record<string, boolean>>(() => {
     const saved = localStorage.getItem('selectedChartMetrics');
     return saved ? JSON.parse(saved) : {
-      appLatency: true, cpu: true, io: true, recordsModified: false, recordsInKafka: false, lag: false, recordsFailed: false, successRate: false, consumerE2eLatency: true, consumerEnrichmentLatency: true
+      appLatency: true, cpu: true, io: true, recordsModified: false, recordsInKafka: false, lag: false, recordsFailed: false, recordsLate: false, successRate: false, consumerE2eLatency: true, consumerEnrichmentLatency: true
     };
   });
 
@@ -101,7 +101,7 @@ function App() {
 
   const currentStats = history.length > 0 
     ? history[history.length - 1] 
-    : { time: '', timestamp: 0, appLatency: 0, cpu: 0, io: 0, recordsModified: 0, recordsFailed: 0, recordsInKafka: 0, lag: 0 };
+    : { time: '', timestamp: 0, appLatency: 0, cpu: 0, io: 0, recordsModified: 0, recordsFailed: 0, recordsLate: 0, recordsInKafka: 0, lag: 0 };
 
   const isRunning = stats?.isRunning || false;
   const isPaused = stats?.isPaused || false;

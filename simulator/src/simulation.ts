@@ -21,6 +21,7 @@ let latencyCount = 0;
 
 let recordsModified = 0;
 let recordsFailed = 0;
+let recordsLate = 0;
 
 // Connect to DB and notify parent
 connectDB().then(() => {
@@ -80,13 +81,15 @@ setInterval(() => {
         queueAvg: queueStats.avg,
         count: latencyCount,
         modified: recordsModified,
-        failed: recordsFailed
+        failed: recordsFailed,
+        late: recordsLate
     });
     // Reset for next batch
     latencyIndex = 0;
     latencyCount = 0;
     recordsModified = 0;
     recordsFailed = 0;
+    recordsLate = 0;
 }, 1000);
 
 function createLimiter(concurrency: number) {
@@ -126,7 +129,7 @@ async function simulationLoop() {
             limit(async () => {
                 const waitTime = performance.now() - startWait;
                 if (waitTime > timeoutMs) {
-                    recordsFailed++;
+                    recordsLate++;
                     return;
                 }
                 try {
@@ -138,8 +141,9 @@ async function simulationLoop() {
                     recordsModified++;
                 } catch (e: any) {
                     if (e.message === 'TIMEOUT') {
-                        recordsFailed++;
+                        recordsLate++;
                     } else {
+                        recordsFailed++;
                         console.error("Op Error:", e);
                     }
                 }

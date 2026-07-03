@@ -126,6 +126,7 @@ let currentRps = 10;
 const workerLatencies = new Map<number, any>();
 let globalRecordsModified = 0;
 let globalRecordsFailed = 0;
+let globalRecordsLate = 0;
 let baselineKafkaOffset = 0;
 let globalCaptureLagMs = 0;
 
@@ -265,6 +266,9 @@ for (let i = 0; i < numWorkers; i++) {
             if (msg.failed) {
                 globalRecordsFailed += msg.failed;
             }
+            if (msg.late) {
+                globalRecordsLate += msg.late;
+            }
         }
     });
 
@@ -340,6 +344,7 @@ app.get('/api/stats', async (req, res) => {
             containerStats,
             recordsModified: globalRecordsModified,
             recordsFailed: globalRecordsFailed,
+            recordsLate: globalRecordsLate,
             recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
             lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
             captureLagMs: globalCaptureLagMs,
@@ -360,6 +365,7 @@ app.post('/api/simulate/start', (req, res) => {
     
     globalRecordsModified = 0;
     globalRecordsFailed = 0;
+    globalRecordsLate = 0;
     
     currentRunId = Date.now().toString();
     runStartTime = Date.now();
@@ -526,6 +532,7 @@ setInterval(async () => {
                 containerStats,
                 recordsModified: globalRecordsModified,
                 recordsFailed: globalRecordsFailed,
+                recordsLate: globalRecordsLate,
                 recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
                 lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
                 captureLagMs: globalCaptureLagMs,
@@ -586,6 +593,7 @@ app.post('/api/simulate/clean', async (req, res) => {
         
         globalRecordsModified = 0;
         globalRecordsFailed = 0;
+        globalRecordsLate = 0;
         globalMessagesConsumed = 0;
         globalEnrichmentsFailed = 0;
         baselineKafkaOffset = 0;

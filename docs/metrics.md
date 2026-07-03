@@ -23,8 +23,12 @@ This document outlines the various metrics tracked during the simulation, displa
   - **Importance**: Represents the actual throughput achieved by the system.
 
 - **Records Failed (`recordsFailed`)**
-  - **What it is**: The number of operations that timed out (exceeded `timeoutMs`) or threw a database error (e.g., deadlocks).
-  - **Importance**: A high failure count indicates the system has hit a hard bottleneck and is dropping requests.
+  - **What it is**: The number of operations that threw a database error (e.g., deadlocks or connection failures).
+  - **Importance**: A high failure count indicates the system has hit a hard bottleneck or database issues.
+
+- **Records Late (`recordsLate`)**
+  - **What it is**: The number of operations that timed out (exceeded `timeoutMs`).
+  - **Importance**: A high late count indicates processing delays and excessive wait times in the queue.
 
 - **Success Rate (`successRate`)**
   - **What it is**: The percentage of successful requests out of the total attempted requests.

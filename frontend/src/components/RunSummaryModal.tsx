@@ -17,7 +17,7 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
   const [verificationResult, setVerificationResult] = useState<any>(null);
   const [isVerifying, setIsVerifying] = useState(false);
 
-  const totalRecords = (stats?.recordsModified || 0) + (stats?.recordsFailed || 0);
+  const totalRecords = (stats?.recordsModified || 0) + (stats?.recordsFailed || 0) + (stats?.recordsLate || 0);
   const successRate = totalRecords > 0 
     ? ((stats.recordsModified / totalRecords) * 100).toFixed(2) 
     : '0.00';
@@ -33,6 +33,7 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
       elapsedSec: stats?.elapsedSec,
       recordsModified: stats?.recordsModified,
       recordsFailed: stats?.recordsFailed,
+      recordsLate: stats?.recordsLate,
       successRate,
       p95: stats?.p95,
       p99: stats?.p99,

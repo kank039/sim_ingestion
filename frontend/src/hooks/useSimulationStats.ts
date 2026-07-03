@@ -41,7 +41,7 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
           if (data.isRunning) {
             setHistory(prev => {
               const actualRps = prev.length > 0 ? Math.max(0, (data.recordsModified || 0) - prev[prev.length - 1].recordsModified) : 0;
-                const totalRecords = (data.recordsModified || 0) + (data.recordsFailed || 0);
+                const totalRecords = (data.recordsModified || 0) + (data.recordsFailed || 0) + (data.recordsLate || 0);
                 const successRate = totalRecords > 0 ? parseFloat(((data.recordsModified / totalRecords) * 100).toFixed(2)) : 100;
                 
                 const newHistory = [...prev, {
@@ -57,6 +57,7 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
                   active_locks: data.dbStats?.active_locks || 0,
                   recordsModified: data.recordsModified || 0,
                   recordsFailed: data.recordsFailed || 0,
+                  recordsLate: data.recordsLate || 0,
                   recordsInKafka: data.recordsInKafka || 0,
                   lag: data.lag || 0,
                   actualRps,

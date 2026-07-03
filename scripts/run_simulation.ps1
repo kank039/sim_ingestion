@@ -126,7 +126,7 @@ if (-not (Test-Path -Path $outputDir)) {
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $csvFile = "$outputDir\sim_app${approach}_rps${rps}_$timestamp.csv"
 
-$headers = "Time,Approach,RPS,ActualRPS,SuccessRate(%),AppLatency(ms),QueueLatency(ms),p95(ms),p99(ms),RecordsModified,RecordsFailed,RecordsInKafka,Lag,ConsumerE2ELatency(ms),ConsumerEnrichmentLatency(ms),DB_CPU,DB_IO,DB_WaitTasks,DB_ActiveLocks,App_CPU,App_Mem,Debezium_CPU,Debezium_Mem,Kafka_CPU,Kafka_Mem"
+$headers = "Time,Approach,RPS,ActualRPS,SuccessRate(%),AppLatency(ms),QueueLatency(ms),p95(ms),p99(ms),RecordsModified,RecordsFailed,RecordsLate,RecordsInKafka,Lag,ConsumerE2ELatency(ms),ConsumerEnrichmentLatency(ms),DB_CPU,DB_IO,DB_WaitTasks,DB_ActiveLocks,App_CPU,App_Mem,Debezium_CPU,Debezium_Mem,Kafka_CPU,Kafka_Mem"
 Out-File -FilePath $csvFile -InputObject $headers -Encoding UTF8
 
 $prevRecordsModified = 0
@@ -166,7 +166,7 @@ for ($i = 0; $i -lt $duration; $i++) {
             $actualRps = [Math]::Max(0, $stats.recordsModified - $prevRecordsModified)
             $prevRecordsModified = $stats.recordsModified
             
-            $totalRecords = $stats.recordsModified + $stats.recordsFailed
+            $totalRecords = $stats.recordsModified + $stats.recordsFailed + $stats.recordsLate
             $successRate = 100
             if ($totalRecords -gt 0) {
                 $successRate = [Math]::Round(($stats.recordsModified / $totalRecords) * 100, 2)
@@ -179,7 +179,7 @@ for ($i = 0; $i -lt $duration; $i++) {
                 $consumerEnrichmentLatency = $stats.subscriberStats.avgEnrichmentLatency
             }
 
-            $row = "$time,$($stats.approach),$($stats.rps),$actualRps,$successRate,$($stats.appLatency),$($stats.queueLatency),$($stats.p95),$($stats.p99),$($stats.recordsModified),$($stats.recordsFailed),$($stats.recordsInKafka),$($stats.lag),$consumerE2ELatency,$consumerEnrichmentLatency,$dbCpu,$dbIo,$dbWaits,$dbLocks,$appCpu,$appMem,$debCpu,$debMem,$kafCpu,$kafMem"
+            $row = "$time,$($stats.approach),$($stats.rps),$actualRps,$successRate,$($stats.appLatency),$($stats.queueLatency),$($stats.p95),$($stats.p99),$($stats.recordsModified),$($stats.recordsFailed),$($stats.recordsLate),$($stats.recordsInKafka),$($stats.lag),$consumerE2ELatency,$consumerEnrichmentLatency,$dbCpu,$dbIo,$dbWaits,$dbLocks,$appCpu,$appMem,$debCpu,$debMem,$kafCpu,$kafMem"
             
             Add-Content -Path $csvFile -Value $row
             

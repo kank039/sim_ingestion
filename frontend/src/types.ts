@@ -19,6 +19,7 @@ export interface TelemetryPoint {
   active_locks?: number;
   recordsModified: number;
   recordsFailed: number;
+  recordsLate: number;
   recordsInKafka: number;
   lag: number;
   captureLagMs?: number;
@@ -61,6 +62,7 @@ export interface SimulationStats {
   containerStats: ContainerStat[];
   recordsModified: number;
   recordsFailed: number;
+  recordsLate: number;
   recordsInKafka: number;
   lag: number;
   captureLagMs?: number;

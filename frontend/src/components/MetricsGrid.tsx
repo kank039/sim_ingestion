@@ -14,7 +14,8 @@ const METRIC_DESCRIPTIONS: Record<string, string> = {
   recordsModified: "What it is: Cumulative number of successful database mutations.\nImportance: Represents actual throughput.",
   recordsInKafka: "What it is: Total events captured by Debezium and committed to Kafka.\nImportance: Verifies events are flowing through streaming infrastructure.",
   lag: "What it is: Difference between Records Modified and Records in Kafka.\nImportance: Critical for evaluating CDC performance (stale data).",
-  recordsFailed: "What it is: Number of operations that timed out or threw an error.\nImportance: High count indicates hard bottleneck.",
+  recordsFailed: "What it is: Number of operations that threw an error.\nImportance: High count indicates hard bottleneck.",
+  recordsLate: "What it is: Number of operations that timed out.\nImportance: High count indicates processing delays.",
   successRate: "What it is: Percentage of successful requests.\nImportance: Direct indicator of system stability.",
   numSubscribers: "What it is: Number of active consumer workers.\nImportance: Shows horizontal scaling factor for Approach 5.",
   totalMessagesConsumed: "What it is: Total messages fully processed by consumers.\nImportance: Represents downstream throughput.",
@@ -32,7 +33,7 @@ interface MetricsGridProps {
 }
 
 export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selectedChartMetrics, toggleChartMetric, subscriberStats }) => {
-  const totalRecords = (currentStats.recordsModified || 0) + (currentStats.recordsFailed || 0);
+  const totalRecords = (currentStats.recordsModified || 0) + (currentStats.recordsFailed || 0) + (currentStats.recordsLate || 0);
   const successRate = totalRecords > 0 
     ? ((currentStats.recordsModified / totalRecords) * 100).toFixed(2) 
     : '100.00';
@@ -125,6 +126,12 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
           <XCircle className="stat-icon" />
           <div className="stat-value">{currentStats.recordsFailed || 0}</div>
           <div className="stat-label">Failed Records</div>
+        </div>
+        <div className="stat-card" style={{ color: (currentStats.recordsLate || 0) > 0 ? '#fbbf24' : 'inherit', position: 'relative' }} title={METRIC_DESCRIPTIONS.recordsLate}>
+          {renderCheckbox('recordsLate')}
+          <Clock className="stat-icon" />
+          <div className="stat-value">{currentStats.recordsLate || 0}</div>
+          <div className="stat-label">Late Records</div>
         </div>
         <div className="stat-card" style={{ color: parseFloat(successRate as string) < 99 ? 'var(--accent-red)' : 'var(--accent-green)', position: 'relative' }} title={METRIC_DESCRIPTIONS.successRate}>
           {renderCheckbox('successRate')}
