@@ -42,7 +42,8 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
             setHistory(prev => {
               const actualRps = prev.length > 0 ? Math.max(0, (data.recordsModified || 0) - prev[prev.length - 1].recordsModified) : 0;
                 const totalRecords = (data.recordsModified || 0) + (data.recordsFailed || 0) + (data.recordsLate || 0);
-                const successRate = totalRecords > 0 ? parseFloat(((data.recordsModified / totalRecords) * 100).toFixed(2)) : 100;
+                const slaRate = totalRecords > 0 ? parseFloat(((data.recordsModified / totalRecords) * 100).toFixed(2)) : 100;
+                const successRate = totalRecords > 0 ? parseFloat((((data.recordsModified + data.recordsLate) / totalRecords) * 100).toFixed(2)) : 100;
                 
                 const newHistory = [...prev, {
                   time: new Date().toLocaleTimeString(),
@@ -61,6 +62,7 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
                   recordsInKafka: data.recordsInKafka || 0,
                   lag: data.lag || 0,
                   actualRps,
+                  slaRate,
                   successRate,
                   consumerE2eLatency: data.subscriberStats?.avgE2eLatency || 0,
                   consumerEnrichmentLatency: data.subscriberStats?.avgEnrichmentLatency || 0

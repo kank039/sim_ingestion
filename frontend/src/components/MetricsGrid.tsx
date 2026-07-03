@@ -16,7 +16,8 @@ const METRIC_DESCRIPTIONS: Record<string, string> = {
   lag: "What it is: Difference between Records Modified and Records in Kafka.\nImportance: Critical for evaluating CDC performance (stale data).",
   recordsFailed: "What it is: Number of operations that threw an error.\nImportance: High count indicates hard bottleneck.",
   recordsLate: "What it is: Number of operations that timed out.\nImportance: High count indicates processing delays.",
-  successRate: "What it is: Percentage of successful requests.\nImportance: Direct indicator of system stability.",
+  successRate: "What it is: Percentage of requests that were successfully processed.\nImportance: Direct indicator of system stability.",
+  slaRate: "What it is: Percentage of successful requests that met the timeout SLA.\nImportance: Indicator of system performance and compliance.",
   numSubscribers: "What it is: Number of active consumer workers.\nImportance: Shows horizontal scaling factor for Approach 5.",
   totalMessagesConsumed: "What it is: Total messages fully processed by consumers.\nImportance: Represents downstream throughput.",
   consumerEnrichmentLatency: "What it is: Time taken to execute multi-table JOINs against DB.\nImportance: Measures cost of doing read-side enrichment.",
@@ -34,8 +35,11 @@ interface MetricsGridProps {
 
 export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selectedChartMetrics, toggleChartMetric, subscriberStats }) => {
   const totalRecords = (currentStats.recordsModified || 0) + (currentStats.recordsFailed || 0) + (currentStats.recordsLate || 0);
-  const successRate = totalRecords > 0 
+  const slaRate = totalRecords > 0 
     ? ((currentStats.recordsModified / totalRecords) * 100).toFixed(2) 
+    : '100.00';
+  const successRate = totalRecords > 0 
+    ? (((currentStats.recordsModified + currentStats.recordsLate) / totalRecords) * 100).toFixed(2) 
     : '100.00';
 
   const renderCheckbox = (id: string) => {
@@ -83,7 +87,7 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
           {renderCheckbox('cpu')}
           <Cpu className="stat-icon" />
           <div className="stat-value">{currentStats.cpu} <span className="stat-unit">%</span></div>
-          <div className="stat-label">SQL Server CPU</div>
+          <div className="stat-label">SQL Server CPU <span style={{ fontSize: '0.75em', opacity: 0.7 }}>(1m)</span></div>
         </div>
         <div className="stat-card" style={{ position: 'relative' }} title={METRIC_DESCRIPTIONS.io}>
           {renderCheckbox('io')}
@@ -133,11 +137,17 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
           <div className="stat-value">{currentStats.recordsLate || 0}</div>
           <div className="stat-label">Late Records</div>
         </div>
+        <div className="stat-card" style={{ color: parseFloat(slaRate as string) < 99 ? 'var(--accent-red)' : 'var(--accent-green)', position: 'relative' }} title={METRIC_DESCRIPTIONS.slaRate}>
+          {renderCheckbox('slaRate')}
+          <Percent className="stat-icon" />
+          <div className="stat-value">{slaRate} <span className="stat-unit">%</span></div>
+          <div className="stat-label">SLA %</div>
+        </div>
         <div className="stat-card" style={{ color: parseFloat(successRate as string) < 99 ? 'var(--accent-red)' : 'var(--accent-green)', position: 'relative' }} title={METRIC_DESCRIPTIONS.successRate}>
           {renderCheckbox('successRate')}
           <Percent className="stat-icon" />
           <div className="stat-value">{successRate} <span className="stat-unit">%</span></div>
-          <div className="stat-label">Success Rate</div>
+          <div className="stat-label">Success %</div>
         </div>
       </div>
 

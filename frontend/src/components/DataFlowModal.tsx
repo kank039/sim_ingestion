@@ -12,12 +12,15 @@ interface DataFlowModalProps {
 
 export const DataFlowModal: React.FC<DataFlowModalProps> = ({ approach, currentStats, subscriberStats, onClose }) => {
   const totalRecords = (currentStats.recordsModified || 0) + (currentStats.recordsFailed || 0) + (currentStats.recordsLate || 0);
-  const successRate = totalRecords > 0 
+  const slaRate = totalRecords > 0 
     ? ((currentStats.recordsModified / totalRecords) * 100).toFixed(2) 
     : '100.00';
+  const successRate = totalRecords > 0 
+    ? (((currentStats.recordsModified + currentStats.recordsLate) / totalRecords) * 100).toFixed(2) 
+    : '100.00';
 
-  const appLabel = `Simulator App<br/>RPS: ${currentStats.actualRps || 0}<br/>Success: ${successRate}%<br/>App Latency: ${currentStats.appLatency}ms`;
-  const dbLabel = `SQL Server<br/>Modified: ${currentStats.recordsModified || 0}<br/>CPU: ${currentStats.cpu}%<br/>I/O: ${currentStats.io} MB/s<br/>Wait Tasks: ${currentStats.wait_tasks || 0}<br/>Locks: ${currentStats.active_locks || 0}`;
+  const appLabel = `Simulator App<br/>RPS: ${currentStats.actualRps || 0}<br/>SLA: ${slaRate}%<br/>Success: ${successRate}%<br/>App Latency: ${currentStats.appLatency}ms`;
+  const dbLabel = `SQL Server<br/>Modified: ${currentStats.recordsModified || 0}<br/>CPU (1m): ${currentStats.cpu}%<br/>I/O: ${currentStats.io} MB/s<br/>Wait Tasks: ${currentStats.wait_tasks || 0}<br/>Locks: ${currentStats.active_locks || 0}`;
   const kafkaLabel = `Kafka Topic<br/>Records: ${currentStats.recordsInKafka || 0}<br/>Lag: ${currentStats.lag || 0}`;
   
   let subsLabel = `Node.js Consumer Workers`;

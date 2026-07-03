@@ -24,6 +24,8 @@ export interface TelemetryPoint {
   lag: number;
   captureLagMs?: number;
   actualRps?: number;
+  slaRate?: number;
+  successRate?: number;
   consumerE2eLatency?: number;
   consumerEnrichmentLatency?: number;
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, LayoutDashboard, Check, Download, FileText, Network, Trash2 } from 'lucide-react';
+import { AlertTriangle, LayoutDashboard, Check, Download, FileText, Network, Trash2, Activity, Eraser } from 'lucide-react';
 import './App.css';
 
 import { useSimulationStats } from './hooks/useSimulationStats';
@@ -28,7 +28,7 @@ function App() {
   const {
     approach, setApproach, rps, setRps, endRps, setEndRps,
     timeoutMs, setTimeoutMs,
-    isGradual, setIsGradual, isCleaning, updateSim, handleStartStop, handlePause, handleResume, handleClean,
+    isGradual, setIsGradual, isCleaning, isCheckingHealth, updateSim, handleStartStop, handlePause, handleResume, handleClean, handleHealthCheck, handleCleanCdc,
     isInsertsOnly, setIsInsertsOnly,
     cardinality, setCardinality,
     insertWeight, setInsertWeight,
@@ -63,7 +63,7 @@ function App() {
   const [selectedChartMetrics, setSelectedChartMetrics] = useState<Record<string, boolean>>(() => {
     const saved = localStorage.getItem('selectedChartMetrics');
     return saved ? JSON.parse(saved) : {
-      appLatency: true, cpu: true, io: true, recordsModified: false, recordsInKafka: false, lag: false, recordsFailed: false, recordsLate: false, successRate: false, consumerE2eLatency: true, consumerEnrichmentLatency: true
+      appLatency: true, cpu: true, io: true, recordsModified: false, recordsInKafka: false, lag: false, recordsFailed: false, recordsLate: false, slaRate: false, successRate: false, consumerE2eLatency: true, consumerEnrichmentLatency: true
     };
   });
 
@@ -211,6 +211,24 @@ function App() {
             disabled={isRunning || isCleaning}
           >
             <Trash2 size={20} className={isCleaning ? 'spin' : ''} />
+          </button>
+          <button 
+            className={`icon-btn ${isCheckingHealth ? 'cleaning' : ''}`} 
+            onClick={handleHealthCheck} 
+            title="System Health Check"
+            aria-label="System Health Check"
+            disabled={isRunning || isCheckingHealth}
+          >
+            <Activity size={20} className={isCheckingHealth ? 'spin' : ''} />
+          </button>
+          <button 
+            className="icon-btn" 
+            onClick={handleCleanCdc} 
+            title="Clear CDC Tables"
+            aria-label="Clear CDC Tables"
+            disabled={isRunning}
+          >
+            <Eraser size={20} />
           </button>
           <div className="status-badge">
             <span style={{ 

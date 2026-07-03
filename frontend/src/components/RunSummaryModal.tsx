@@ -18,8 +18,11 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
   const [isVerifying, setIsVerifying] = useState(false);
 
   const totalRecords = (stats?.recordsModified || 0) + (stats?.recordsFailed || 0) + (stats?.recordsLate || 0);
-  const successRate = totalRecords > 0 
+  const slaRate = totalRecords > 0 
     ? ((stats.recordsModified / totalRecords) * 100).toFixed(2) 
+    : '0.00';
+  const successRate = totalRecords > 0 
+    ? (((stats.recordsModified + stats.recordsLate) / totalRecords) * 100).toFixed(2) 
     : '0.00';
 
   const handleSave = async () => {
@@ -34,6 +37,7 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
       recordsModified: stats?.recordsModified,
       recordsFailed: stats?.recordsFailed,
       recordsLate: stats?.recordsLate,
+      slaRate,
       successRate,
       p95: stats?.p95,
       p99: stats?.p99,
@@ -72,7 +76,7 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
       backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 1000,
       display: 'flex', justifyContent: 'center', alignItems: 'center'
     }}>
-      <div className="glass-panel" style={{ width: '500px', maxWidth: '90%', padding: '2rem', position: 'relative' }}>
+      <div className="glass-panel" style={{ width: '600px', maxWidth: '90%', padding: '2rem', position: 'relative' }}>
         <button 
           onClick={onClose}
           style={{ position: 'absolute', top: '1rem', right: '1rem', background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}
@@ -84,7 +88,7 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
           <Activity size={24} color="var(--accent-blue)" /> Simulation Finished
         </h2>
         
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', margin: '2rem 0' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', margin: '2rem 0' }}>
           <div>
             <div style={{ color: '#aaa', fontSize: '0.85rem' }}>Approach</div>
             <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{APPROACHES.find(a => a.id === stats?.approach)?.name}</div>
@@ -98,11 +102,18 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
             <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{totalRecords.toLocaleString()}</div>
           </div>
           <div>
-            <div style={{ color: '#aaa', fontSize: '0.85rem' }}>Success Rate</div>
+            <div style={{ color: '#aaa', fontSize: '0.85rem' }}>SLA %</div>
+            <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: parseFloat(slaRate) > 99 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+              {slaRate}%
+            </div>
+          </div>
+          <div>
+            <div style={{ color: '#aaa', fontSize: '0.85rem' }}>Success %</div>
             <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: parseFloat(successRate) > 99 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
               {successRate}%
             </div>
           </div>
+          <div></div>
           <div>
             <div style={{ color: '#aaa', fontSize: '0.85rem' }}>p95 Latency</div>
             <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{stats?.p95 || 0} ms</div>

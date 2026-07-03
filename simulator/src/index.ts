@@ -295,7 +295,7 @@ app.get('/api/stats', async (req, res) => {
             // Topic might not exist yet
         }
         
-        const lag = Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset));
+        const lag = Math.max(0, (globalRecordsModified + globalRecordsLate) - Math.max(0, recordsInKafka - baselineKafkaOffset));
         
         if (!globalFlawAlert && lag > Math.max(currentRps * 10, 5000)) {
             if (currentApproach === 4) {
@@ -353,7 +353,7 @@ app.get('/api/stats', async (req, res) => {
             recordsFailed: globalRecordsFailed,
             recordsLate: globalRecordsLate,
             recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
-            lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
+            lag: Math.max(0, (globalRecordsModified + globalRecordsLate) - Math.max(0, recordsInKafka - baselineKafkaOffset)),
             captureLagMs: globalCaptureLagMs,
             logs: systemLogs, // For GET, return all logs
             subscriberStats
@@ -493,7 +493,7 @@ setInterval(async () => {
             recordsInKafka = offsets.reduce((sum, partition) => sum + parseInt(partition.high, 10), 0);
         } catch(e) {}
         
-        const lag = Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset));
+        const lag = Math.max(0, (globalRecordsModified + globalRecordsLate) - Math.max(0, recordsInKafka - baselineKafkaOffset));
         
         if (!globalFlawAlert && lag > Math.max(currentRps * 10, 5000)) {
             if (currentApproach === 4) {
@@ -557,7 +557,7 @@ setInterval(async () => {
                 recordsFailed: globalRecordsFailed,
                 recordsLate: globalRecordsLate,
                 recordsInKafka: Math.max(0, recordsInKafka - baselineKafkaOffset),
-                lag: Math.max(0, globalRecordsModified - Math.max(0, recordsInKafka - baselineKafkaOffset)),
+                lag: Math.max(0, (globalRecordsModified + globalRecordsLate) - Math.max(0, recordsInKafka - baselineKafkaOffset)),
                 captureLagMs: globalCaptureLagMs,
                 newLogs,
                 subscriberStats
@@ -573,6 +573,36 @@ setInterval(async () => {
 app.get('/health', (req, res) => {
     const pool = getPool();
     res.json({ status: 'ok', workers: readyWorkers, dbConnected: !!pool?.connected });
+});
+
+app.post('/api/simulate/clean-cdc', async (req, res) => {
+    try {
+        addLog('Initiating hard TRUNCATE of SQL Server CDC tables...', 'info');
+        const cdcTables = [
+            'dbo_billing_record_CT',
+            'dbo_cdc_events_shadow_CT',
+            'dbo_invoice_batch_CT',
+            'dbo_outbox_events_CT',
+            'dbo_rate_schedule_CT',
+            'dbo_subscriber_plan_CT',
+            'dbo_subscriber_usage_CT',
+            'dbo_enrichment_requests_CT'
+        ];
+
+        for (const table of cdcTables) {
+            try {
+                await getPool().request().query(`TRUNCATE TABLE cdc.${table}`);
+                addLog(`CDC table truncated: cdc.${table}`, 'info');
+            } catch (e) {
+                // Table might not exist or error
+            }
+        }
+        
+        addLog('CDC cleanup completed.', 'info');
+        res.json({ message: 'CDC cleanup completed' });
+    } catch(e) {
+        res.status(500).json({ error: String(e) });
+    }
 });
 
 app.post('/api/simulate/clean', async (req, res) => {
@@ -680,6 +710,64 @@ app.post('/api/system/reconnect', async (req, res) => {
         res.status(500).json({ error: String(e) });
     } finally {
         isReconnecting = false;
+    }
+});
+
+app.get('/api/system/health-check', async (req, res) => {
+    const health = {
+        sqlServer: 'UNKNOWN',
+        kafka: 'UNKNOWN',
+        debezium: 'UNKNOWN',
+        cdc_rows: 0,
+        errors: [] as string[]
+    };
+    
+    try {
+        // Check SQL Server
+        try {
+            const result = await getPool().request().query('SELECT 1 as alive; SELECT COUNT(*) as count FROM sim_db.cdc.dbo_billing_record_CT;');
+            health.sqlServer = 'OK';
+            health.cdc_rows = (result.recordsets as any)[1][0].count || 0;
+        } catch (e) {
+            health.sqlServer = 'ERROR';
+            health.errors.push('SQL Server: ' + String(e));
+        }
+
+        // Check Kafka
+        try {
+            const topics = await admin.listTopics();
+            if (topics) {
+                health.kafka = 'OK';
+            }
+        } catch (e) {
+            health.kafka = 'ERROR';
+            health.errors.push('Kafka: ' + String(e));
+        }
+
+        // Check Debezium
+        try {
+            const response = await fetch('http://debezium:8083/connectors/billing_record_connector/status');
+            if (response.ok) {
+                const data = await response.json() as any;
+                if (data.connector?.state === 'RUNNING' && data.tasks?.every((t: any) => t.state === 'RUNNING')) {
+                    health.debezium = 'OK';
+                } else {
+                    health.debezium = 'DEGRADED';
+                    health.errors.push('Debezium: Connector or task not running');
+                }
+            } else {
+                health.debezium = 'ERROR';
+                health.errors.push('Debezium: ' + response.statusText);
+            }
+        } catch (e) {
+            health.debezium = 'ERROR';
+            health.errors.push('Debezium: ' + String(e));
+        }
+
+        const isHealthy = health.sqlServer === 'OK' && health.kafka === 'OK' && health.debezium === 'OK';
+        res.json({ healthy: isHealthy, ...health });
+    } catch (e) {
+        res.status(500).json({ error: String(e) });
     }
 });
 

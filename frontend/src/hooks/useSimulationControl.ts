@@ -9,6 +9,7 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
   const [timeoutMs, setTimeoutMs] = useState(3000);
   const [isGradual, setIsGradual] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
   const [isInsertsOnly, setIsInsertsOnly] = useState(true);
   
   const [cardinality, setCardinality] = useState(100);
@@ -74,6 +75,37 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     }
   };
 
+  const handleHealthCheck = async () => {
+    try {
+      setIsCheckingHealth(true);
+      addActionLog('Running system health checks...', 'info');
+      const res = await fetch(`${API_BASE}/system/health-check`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || await res.text());
+      
+      if (data.healthy) {
+        addActionLog(`System is healthy! (CDC rows: ${data.cdc_rows})`, 'info');
+      } else {
+        addActionLog(`System health degraded: ${data.errors.join(', ')}`, 'warning');
+      }
+    } catch (e) {
+      addActionLog(`Health check failed: ${String(e)}`, 'error');
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  };
+
+  const handleCleanCdc = async () => {
+    try {
+      addActionLog('Hard truncating CDC tables...', 'info');
+      const res = await fetch(`${API_BASE}/simulate/clean-cdc`, { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text());
+      addActionLog('CDC tables truncated successfully.', 'info');
+    } catch (e) {
+      addActionLog(`CDC cleanup failed: ${String(e)}`, 'error');
+    }
+  };
+
   const handlePause = async () => {
     try {
       addActionLog('Pausing simulation...', 'info');
@@ -114,9 +146,11 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     rps, setRps,
     endRps, setEndRps,
     timeoutMs, setTimeoutMs,
-    isGradual, setIsGradual,
+    isGradual,
+    setIsGradual,
     isCleaning,
-    updateSim, handleStartStop, handlePause, handleResume, handleClean,
+    isCheckingHealth,
+    updateSim, handleStartStop, handlePause, handleResume, handleClean, handleHealthCheck, handleCleanCdc,
     isInsertsOnly, setIsInsertsOnly,
     cardinality, setCardinality,
     insertWeight, setInsertWeight,
