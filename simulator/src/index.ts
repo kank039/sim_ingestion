@@ -96,7 +96,7 @@ async function getContainerStats() {
         }));
 
         const results = await Promise.all(statsPromises);
-        return results.filter(r => r !== null);
+        return results.filter(r => r !== null && r.name !== 'kafka-ui');
     } catch (e) {
         console.error("Docker stats error:", e);
         return [];
@@ -607,45 +607,32 @@ app.post('/api/simulate/clean-cdc', async (req, res) => {
 
 app.post('/api/simulate/clean-kafka', async (req, res) => {
     try {
-        addLog('Initiating non-destructive Kafka topic purge (retention override)...', 'info');
+        addLog('Initiating immediate Kafka topic purge (deleteTopicRecords)...', 'info');
         
         const topics = await admin.listTopics();
         const simTopics = topics.filter((t: string) => t.startsWith('sim.'));
         
         if (simTopics.length > 0) {
-            // Set retention.ms = 1000 for all sim topics
-            const configResources = simTopics.map((topic: string) => ({
-                type: 2, // ConfigResourceTypes.TOPIC
-                name: topic,
-                configEntries: [{ name: 'retention.ms', value: '1000' }]
-            }));
-            
-            await admin.alterConfigs({
-                validateOnly: false,
-                resources: configResources
-            });
-            
-            addLog(`Set retention.ms=1000 on ${simTopics.length} topics. Waiting for log cleaner...`, 'info');
-            
-            // Wait 5 seconds for Kafka log cleaner to purge
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            
-            // Revert retention.ms override (delete config entry)
-            // Kafkajs alterConfigs deletes entries that are omitted or sets them to default? 
-            // Wait, in Kafkajs, we can just delete the config entry.
-            // Actually, in Kafkajs, you can omit the value or set it to the default (e.g., '604800000').
-            const restoreResources = simTopics.map((topic: string) => ({
-                type: 2,
-                name: topic,
-                configEntries: [{ name: 'retention.ms', value: '604800000' }] // 7 days default
-            }));
-            
-            await admin.alterConfigs({
-                validateOnly: false,
-                resources: restoreResources
-            });
-            
-            addLog(`Restored default retention.ms on Kafka topics. Purge complete.`, 'info');
+            for (const topic of simTopics) {
+                try {
+                    const offsets = await admin.fetchTopicOffsets(topic);
+                    const partitionsToDelete = offsets.map((p: any) => ({
+                        partition: p.partition,
+                        offset: p.high
+                    })).filter((p: any) => p.offset !== '0');
+                    
+                    if (partitionsToDelete.length > 0) {
+                        await admin.deleteTopicRecords({
+                            topic,
+                            partitions: partitionsToDelete
+                        });
+                        addLog(`Purged records from topic: ${topic}`, 'info');
+                    }
+                } catch (err) {
+                    addLog(`Failed to purge topic ${topic}: ${String(err)}`, 'error');
+                }
+            }
+            addLog(`Kafka topics purge complete.`, 'info');
         } else {
             addLog('No Kafka topics found to purge.', 'info');
         }
