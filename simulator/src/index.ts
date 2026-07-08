@@ -50,7 +50,8 @@ async function getContainerStats() {
                             let limitCpus = 1;
                             const name = c.Names[0].replace('/', '');
                             if (name === 'sqlserver') limitCpus = 4;
-                            else if (name === 'kafka' || name === 'simulator') limitCpus = 2;
+                            else if (name === 'kafka') limitCpus = 2;
+                            else if (name === 'simulator') limitCpus = 4;
                             else if (name === 'debezium' || name === 'flink-taskmanager') limitCpus = 1.5;
                             else if (name === 'flink-jobmanager') limitCpus = 1;
                             else limitCpus = Math.ceil(cpu / 100) || 1; // Fallback
@@ -107,7 +108,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const numWorkers = 4; // Using 4 worker threads
+const numWorkers = 8; // Using 8 worker threads
 const workers: Worker[] = [];
 let readyWorkers = 0;
 

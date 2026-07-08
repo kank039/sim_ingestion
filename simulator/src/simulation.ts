@@ -26,6 +26,8 @@ let recordsLate = 0;
 // Connect to DB and notify parent
 connectDB().then(() => {
     parentPort?.postMessage({ type: 'ready' });
+}).catch((err) => {
+    console.error("Worker DB connection failed:", err);
 });
 
 parentPort?.on('message', (msg) => {
@@ -92,11 +94,14 @@ setInterval(() => {
     recordsLate = 0;
 }, 1000);
 
-function createLimiter(concurrency: number) {
+function createLimiter(concurrency: number, maxQueue: number = 5000) {
     let active = 0;
     const queue: (() => void)[] = [];
     return async <T>(fn: () => Promise<T>): Promise<T> => {
         if (active >= concurrency) {
+            if (queue.length >= maxQueue) {
+                throw new Error('QUEUE_FULL');
+            }
             await new Promise<void>(resolve => queue.push(resolve));
         }
         active++;
@@ -112,7 +117,7 @@ function createLimiter(concurrency: number) {
     };
 }
 
-const limit = createLimiter(50);
+const limit = createLimiter(50, 5000);
 
 async function simulationLoop() {
     while (isRunning) {
@@ -147,7 +152,13 @@ async function simulationLoop() {
                         console.error("Op Error:", e);
                     }
                 }
-            }).catch(e => console.error("Limit Error:", e));
+            }).catch(e => {
+                if (e.message === 'QUEUE_FULL') {
+                    recordsLate++;
+                } else {
+                    console.error("Limit Error:", e);
+                }
+            });
         }
         
         await new Promise(resolve => setTimeout(resolve, 100)); // Sleep 100ms
@@ -176,41 +187,54 @@ async function executeOperation(waitTime: number) {
 
     try {
         if (currentApproach === 2) {
-            // Transactional Outbox
-            const transaction = new sql.Transaction(pool);
-            await transaction.begin();
-            const request = new sql.Request(transaction);
+            // Transactional Outbox (Fixed: Single batch with explicit BEGIN TRAN / COMMIT TRAN inside SQL Server)
+            const request = pool.request();
             request.input('batchId', sql.Int, batchId);
             request.input('amount', sql.Decimal(10, 2), amount);
             request.input('payload', sql.NVarChar, payload);
+
+            let sqlQuery = '';
             
             if (operationType === 'delete') {
-                const res = await request.query(`DELETE TOP (1) FROM billing_record WHERE batch_id = @batchId;`);
-                if (res.rowsAffected[0] === 0) {
-                    await request.query(`
+                sqlQuery = `
+                    BEGIN TRAN;
+                    DELETE TOP (1) FROM billing_record WHERE batch_id = @batchId;
+                    IF @@ROWCOUNT = 0
+                    BEGIN
                         INSERT INTO billing_record (batch_id, amount) VALUES (@batchId, @amount);
                         INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);
-                    `);
-                } else {
-                    await request.query(`INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);`);
-                }
+                    END
+                    ELSE
+                    BEGIN
+                        INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);
+                    END
+                    COMMIT TRAN;
+                `;
             } else if (operationType === 'update') {
-                const res = await request.query(`UPDATE TOP (1) billing_record SET amount = @amount WHERE batch_id = @batchId;`);
-                if (res.rowsAffected[0] === 0) {
-                    await request.query(`
+                sqlQuery = `
+                    BEGIN TRAN;
+                    UPDATE TOP (1) billing_record SET amount = @amount WHERE batch_id = @batchId;
+                    IF @@ROWCOUNT = 0
+                    BEGIN
                         INSERT INTO billing_record (batch_id, amount) VALUES (@batchId, @amount);
                         INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);
-                    `);
-                } else {
-                    await request.query(`INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);`);
-                }
+                    END
+                    ELSE
+                    BEGIN
+                        INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);
+                    END
+                    COMMIT TRAN;
+                `;
             } else {
-                await request.query(`
+                sqlQuery = `
+                    BEGIN TRAN;
                     INSERT INTO billing_record (batch_id, amount) VALUES (@batchId, @amount);
                     INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);
-                `);
+                    COMMIT TRAN;
+                `;
             }
-            await transaction.commit();
+
+            await request.query(sqlQuery);
         } else {
             // Triggers / Flink / SMT Approaches
             const request = pool.request();
