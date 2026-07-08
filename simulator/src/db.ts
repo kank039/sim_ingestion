@@ -11,7 +11,7 @@ const config: sql.config = {
         trustServerCertificate: true
     },
     pool: {
-        max: 200,
+        max: 2000,
         min: 1
     }
 };

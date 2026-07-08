@@ -28,7 +28,7 @@ const dbConfig: sql.config = {
         trustServerCertificate: true
     },
     pool: {
-        max: Math.min(50, assignedSubscribers * 5),  // Larger pool to handle concurrent queries from multiple subscribers
+        max: 2000,
         min: 1
     }
 };

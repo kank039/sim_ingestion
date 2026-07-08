@@ -9,10 +9,10 @@ Based on the automated ramp-up simulation results, this document provides a deta
   * **Explanation:** In this approach, a trigger fires synchronously on every DML operation to insert a record into the outbox table. While this ensures strong consistency without client-side coordination, the database engine bears the full brunt of the compute. Under heavy concurrent load (~1700 RPS), the SQL Server CPU becomes saturated. Transactions begin to queue up waiting for CPU time to execute the trigger logic, leading to increased latency and eventually dropping the throughput success rate below our 80% threshold.
 
 ## Approach 2: Transactional Outbox
-* **Hard Limit Reached:** ~2,410 RPS (Target) / ~1,617 RPS (Actual Peak Throughput)
-* **Failure Condition:** Success metric fell under 80% (Actual: 72.6% at 3510 RPS, but degradation started at 3010 RPS)
-* **Limiting Factor: Database Lock Contention & Connection Limits**
-  * **Explanation:** After optimizing the SQL transactions, fixing the CDC connector, and doubling the Node.js worker threads to push maximum concurrency, we finally found the true physical limit of the database. At around 2,410 RPS, the SQL Server began exhibiting lock contention (`DB_WaitTasks` spiked to 182, `DB_ActiveLocks` to 1,755). The connection pool (max 200) saturated as queries waited for locks, causing application queue latency to skyrocket and requests to drop. While this is the true physical limit of a single SQL Server instance for this schema, it remains the most robust pattern tested.
+* **Hard Limit Reached:** ~3,460 RPS (Target) / ~1,440 RPS (Actual Peak Throughput)
+* **Failure Condition:** Success metric fell under 80% (Actual: 77.67% at 3460 RPS)
+* **Limiting Factor: Database Lock Contention & Internal Queuing**
+  * **Explanation:** After optimizing the SQL transactions, fixing the CDC connector, doubling the Node.js worker threads, and drastically expanding the connection pool (from 200 to 2000 to simulate multiplexing), we pushed this approach to its absolute limits. Because CDC is not supported on Memory-Optimized tables in SQL Server, we relied on connection multiplexing to offload queueing from the application to the database. The database absorbed the massive connection spike, sustaining ~1,300 actual physical RPS while the target load climbed. However, at ~3,460 Target RPS, the sheer volume of locks (`DB_WaitTasks` spiked to 196) caused the queries to timeout inside the database engine, finally breaking the 80% success SLA.
 
 ## Approach 3: Stream-to-Stream Join (Flink)
 * **Hard Limit Reached:** ~1,810 RPS
