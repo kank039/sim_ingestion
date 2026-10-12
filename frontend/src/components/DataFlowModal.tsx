@@ -2,30 +2,28 @@ import React from 'react';
 import { Activity, X } from 'lucide-react';
 import type { TelemetryPoint, SubscriberStats } from '../types';
 import { MermaidDiagram } from './MermaidDiagram';
+import { outcomeRates } from '../metrics';
 
 interface DataFlowModalProps {
   approach: number;
+  trackedTopic?: string | null;
   currentStats: TelemetryPoint;
   subscriberStats?: SubscriberStats;
   onClose: () => void;
 }
 
-export const DataFlowModal: React.FC<DataFlowModalProps> = ({ approach, currentStats, subscriberStats, onClose }) => {
-  const totalRecords = (currentStats.recordsModified || 0) + (currentStats.recordsFailed || 0) + (currentStats.recordsLate || 0);
-  const slaRate = totalRecords > 0 
-    ? ((currentStats.recordsModified / totalRecords) * 100).toFixed(2) 
-    : '100.00';
-  const successRate = totalRecords > 0 
-    ? (((currentStats.recordsModified + currentStats.recordsLate) / totalRecords) * 100).toFixed(2) 
-    : '100.00';
+export const DataFlowModal: React.FC<DataFlowModalProps> = ({ approach, trackedTopic, currentStats, subscriberStats, onClose }) => {
+  const rates = outcomeRates(currentStats);
+  const slaRate = rates.slaRate.toFixed(2);
+  const successRate = rates.successRate.toFixed(2);
 
   const appLabel = `Simulator App<br/>RPS: ${currentStats.actualRps || 0}<br/>SLA: ${slaRate}%<br/>Success: ${successRate}%<br/>App Latency: ${currentStats.appLatency}ms`;
-  const dbLabel = `SQL Server<br/>Modified: ${currentStats.recordsModified || 0}<br/>CPU (1m): ${currentStats.cpu}%<br/>I/O: ${currentStats.io} MB/s<br/>Wait Tasks: ${currentStats.wait_tasks || 0}<br/>Locks: ${currentStats.active_locks || 0}`;
-  const kafkaLabel = `Kafka Topic<br/>Records: ${currentStats.recordsInKafka || 0}<br/>Lag: ${currentStats.lag || 0}`;
+  const dbLabel = `SQL Server<br/>Committed: ${rates.committed}<br/>CPU (1m): ${currentStats.cpu}%<br/>I/O: ${currentStats.io} MB/s<br/>Wait Tasks: ${currentStats.wait_tasks || 0}<br/>Locks: ${currentStats.active_locks || 0}`;
+  const kafkaLabel = `Kafka: ${trackedTopic || 'output topic'}<br/>Delivered: ${currentStats.recordsInKafka || 0}<br/>Lag: ${currentStats.lag || 0}<br/>Commit→Topic: ${currentStats.pipelineLatency || 0}ms`;
   
   let subsLabel = `Node.js Consumer Workers`;
   if (subscriberStats) {
-      subsLabel += `<br/>Active Subs: ${subscriberStats.numSubscribers}<br/>Msgs Consumed: ${subscriberStats.totalMessagesConsumed.toLocaleString()}<br/>Avg Enrich: ${subscriberStats.avgEnrichmentLatency}ms<br/>Avg E2E: ${subscriberStats.avgE2eLatency}ms<br/>Fails: ${subscriberStats.enrichmentsFailed}`;
+      subsLabel += `<br/>Active Subs: ${subscriberStats.numSubscribers}<br/>Msgs Consumed: ${subscriberStats.totalMessagesConsumed.toLocaleString()}<br/>Avg Enrich: ${subscriberStats.avgEnrichmentLatency}ms<br/>Avg E2E: ${subscriberStats.avgE2eLatency}ms<br/>Lag: ${subscriberStats.consumerLag}<br/>Fails: ${subscriberStats.enrichmentsFailed}`;
   }
 
   const appClass = parseFloat(successRate) < 99 ? 'appError' : 'app';
@@ -52,7 +50,7 @@ export const DataFlowModal: React.FC<DataFlowModalProps> = ({ approach, currentS
     chart = `flowchart TD
 ${classDefs}
     App["${appLabel}"]:::${appClass} -->|"1. Insert/Update/Delete"| DB_Main[("billing_record<br/>${dbLabel}")]:::${dbClass}
-    DB_Main -->|"2. Trigger Execution"| DB_Outbox[("outbox_events")]:::${dbClass}
+    DB_Main -->|"2. Trigger Execution"| DB_Outbox[("cdc_events_shadow")]:::${dbClass}
     CDC["Debezium CDC"]:::processing -->|"3. Tail Log"| DB_Outbox
     CDC -->|"4. Push Event"| Kafka[["${kafkaLabel}"]]:::${kafkaClass}
     `;
@@ -75,18 +73,18 @@ ${classDefs}
     chart = `flowchart TD
 ${classDefs}
     App["${appLabel}"]:::${appClass} -->|"1a. Write Domain"| DB[("billing_record<br/>${dbLabel}")]:::${dbClass}
-    App -->|"1b. Write Enrichment Req"| DB2[("enrichment_requests")]:::${dbClass}
+    App -->|"1b. Write Enrichment Req (separate txn)"| DB2[("enrichment_requests")]:::${dbClass}
     
     CDC1["Debezium CDC"]:::processing -->|"2a. Capture billing"| DB
     CDC2["Debezium CDC"]:::processing -->|"2b. Capture enrichment"| DB2
     
-    CDC1 -->|"3a. Publish"| Topic1[["Kafka: billing_events"]]:::${kafkaClass}
-    CDC2 -->|"3b. Publish"| Topic2[["Kafka: enrichment_events"]]:::${kafkaClass}
+    CDC1 -->|"3a. Publish"| Topic1[["Kafka: billing_record CDC"]]:::${kafkaClass}
+    CDC2 -->|"3b. Publish"| Topic2[["Kafka: enrichment_requests CDC"]]:::${kafkaClass}
     
     Topic1 --> Flink["Flink JobManager/TaskManager"]:::processing
     Topic2 --> Flink
     
-    Flink -->|"4. Stateful Stream Join"| FlinkState[("RocksDB State")]:::processing
+    Flink -->|"4. Interval join on change_token (±30s)"| FlinkState[("Join State")]:::processing
     Flink -->|"5. Output Enriched Event"| OutTopic[["${kafkaLabel}"]]:::${kafkaClass}
     `;
   } else if (approach === 4) {

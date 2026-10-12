@@ -1,228 +1,124 @@
+/**
+ * Approach 5 consumer thread. Hosts one Kafka consumer group per assigned subscriber; every
+ * raw billing_record CDC event is enriched with a multi-table JOIN against SQL Server.
+ */
 import { parentPort, workerData } from 'worker_threads';
 import sql from 'mssql';
-import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
+import type { Consumer, EachMessagePayload } from 'kafkajs';
+import { openPool } from './db';
+import { createKafka, setGroupOffsets, type PartitionOffsets } from './kafka';
+import { parseTrackedMessage, billingRefFromEvent } from './cdcEvent';
+import { LatencyHistogram } from './histogram';
 
-const workerId: number = workerData?.workerId ?? 0;
-const assignedSubscribers: number = workerData?.assignedSubscribers ?? 1;
-const baseSubscriberIndex: number = workerData?.baseSubscriberIndex ?? 0;
-
-const MAX_LATENCY_HISTORY = 500;
-let enrichmentLatencies: number[] = new Array(MAX_LATENCY_HISTORY);
-let e2eLatencies: number[] = new Array(MAX_LATENCY_HISTORY);
-let latencyIndex = 0;
-let latencyCount = 0;
-let messagesConsumed = 0;
-let enrichmentsFailed = 0;
-
-let isRunning = false;
-let pool: sql.ConnectionPool;
-let consumers: Consumer[] = [];
-
-const dbConfig: sql.config = {
-    user: 'sa',
-    password: 'Password123!',
-    server: process.env.DB_HOST || 'localhost',
-    database: 'sim_db',
-    options: {
-        encrypt: true,
-        trustServerCertificate: true
-    },
-    pool: {
-        max: 2000,
-        min: 1
-    }
-};
+const workerId: number = workerData.workerId;
+const subscribers: number[] = workerData.subscribers;
+const groupPrefix: string = workerData.groupPrefix;
+const topic: string = workerData.topic;
+const startOffsets: PartitionOffsets = workerData.startOffsets;
 
 const ENRICHMENT_QUERY = `
-    SELECT
-        br.id            AS billing_id,
-        br.batch_id,
-        br.amount,
-        br.created_at,
-        ib.invoice_number,
-        ib.status        AS invoice_status,
-        sp.plan_name,
-        sp.plan_type,
-        sp.base_rate,
-        sp.discount_pct,
-        su.usage_type,
-        su.quantity,
-        su.unit,
-        rs.rate_per_unit,
-        rs.min_charge,
-        rs.max_charge
-    FROM billing_record br WITH (NOLOCK)
-    INNER JOIN invoice_batch ib WITH (NOLOCK)
-        ON br.batch_id = ib.id
-    INNER JOIN subscriber_plan sp WITH (NOLOCK)
-        ON ib.plan_id = sp.id
-    LEFT JOIN subscriber_usage su WITH (NOLOCK)
-        ON br.batch_id = su.batch_id
-    LEFT JOIN rate_schedule rs WITH (NOLOCK)
-        ON sp.id = rs.plan_id
-        AND su.usage_type = rs.usage_type
-    WHERE br.batch_id = @batchId;
-`;
+SELECT
+    br.id AS billing_id, br.amount, br.created_at,
+    ib.invoice_number, ib.status AS invoice_status,
+    sp.plan_name, sp.plan_type, sp.base_rate, sp.discount_pct,
+    su.usage_type, su.quantity, su.unit,
+    rs.rate_per_unit, rs.min_charge, rs.max_charge
+FROM dbo.invoice_batch ib WITH (NOLOCK)
+INNER JOIN dbo.subscriber_plan sp WITH (NOLOCK) ON ib.plan_id = sp.id
+LEFT JOIN dbo.billing_record br WITH (NOLOCK) ON br.id = @billingId
+LEFT JOIN dbo.subscriber_usage su WITH (NOLOCK) ON su.batch_id = ib.id
+LEFT JOIN dbo.rate_schedule rs WITH (NOLOCK) ON rs.plan_id = sp.id AND rs.usage_type = su.usage_type
+WHERE ib.id = @batchId;`;
 
-function calculatePercentiles(latencies: number[], count: number) {
-    if (count === 0) return { avg: 0, p50: 0, p95: 0, p99: 0 };
-    const validLatencies = latencies.slice(0, count).sort((a, b) => a - b);
-    const sum = validLatencies.reduce((a, b) => a + b, 0);
-    return {
-        avg: sum / count,
-        p50: validLatencies[Math.floor(count * 0.50)],
-        p95: validLatencies[Math.floor(count * 0.95)],
-        p99: validLatencies[Math.floor(count * 0.99)]
-    };
-}
+let pool: sql.ConnectionPool | null = null;
+let consumers: Consumer[] = [];
+let running = false;
 
-// Periodically send stats to the main thread
-setInterval(() => {
-    const enrichStats = calculatePercentiles(enrichmentLatencies, latencyCount);
-    const e2eStats = calculatePercentiles(e2eLatencies, latencyCount);
+let consumed = 0, failed = 0, skipped = 0, misses = 0;
+const enrichHist = new LatencyHistogram();
+const e2eHist = new LatencyHistogram();
+/** subscriber -> partition -> next offset to process */
+const positions: Record<number, Record<number, string>> = {};
 
+function flush() {
     parentPort?.postMessage({
         type: 'consumer-stats',
         workerId,
-        enrichmentAvg: enrichStats.avg,
-        enrichmentP95: enrichStats.p95,
-        enrichmentP99: enrichStats.p99,
-        e2eAvg: e2eStats.avg,
-        e2eP95: e2eStats.p95,
-        e2eP99: e2eStats.p99,
-        messagesConsumed,
-        enrichmentsFailed
+        consumed, failed, skipped, misses,
+        enrich: enrichHist.toJSON(),
+        e2e: e2eHist.toJSON(),
+        positions,
     });
+    consumed = failed = skipped = misses = 0;
+    enrichHist.reset();
+    e2eHist.reset();
+}
+setInterval(flush, 1000);
 
-    // Reset for next interval
-    latencyIndex = 0;
-    latencyCount = 0;
-    messagesConsumed = 0;
-    enrichmentsFailed = 0;
-}, 1000);
-
-async function connectDB() {
-    try {
-        pool = await sql.connect(dbConfig);
-        console.log(`[Consumer ${workerId}] Connected to SQL Server`);
-    } catch (e) {
-        console.error(`[Consumer ${workerId}] DB connection failed:`, e);
-        throw e;
-    }
+function handlerFor(subscriber: number) {
+    return async ({ partition, message }: EachMessagePayload) => {
+        positions[subscriber][partition] = String(Number(message.offset) + 1);
+        if (!running || !pool) return;
+        const ev = parseTrackedMessage(message.value, 'cdc', topic);
+        const ref = billingRefFromEvent(ev);
+        if (!ref) {
+            skipped++; // tombstones and unparsable messages carry nothing to enrich
+            return;
+        }
+        const start = performance.now();
+        try {
+            const req = pool.request();
+            req.input('billingId', sql.Int, ref.billingId);
+            req.input('batchId', sql.Int, ref.batchId);
+            const res = await req.query(ENRICHMENT_QUERY);
+            enrichHist.record(performance.now() - start);
+            if (ev?.commitTsMs !== undefined) e2eHist.record(Math.max(0, Date.now() - ev.commitTsMs));
+            if (res.recordset.length === 0) misses++;
+            consumed++;
+        } catch (e) {
+            failed++;
+            if (failed <= 3) console.error(`[Consumer ${workerId}] Enrichment failed:`, (e as Error).message);
+        }
+    };
 }
 
-async function connectKafka() {
-    const kafka = new Kafka({
-        clientId: `consumer-worker-${workerId}`,
-        brokers: [process.env.KAFKA_BROKERS || 'localhost:9092']
-    });
+async function start() {
+    pool = await openPool(subscribers.length + 2, { label: `Consumer ${workerId}`, retries: 10 });
+    const kafka = createKafka(`sim-consumer-${workerId}`);
+    const admin = kafka.admin();
+    await admin.connect();
+    for (const sub of subscribers) {
+        await setGroupOffsets(admin, `${groupPrefix}-sub-${sub}`, topic, startOffsets);
+    }
+    await admin.disconnect();
 
-    for (let i = 0; i < assignedSubscribers; i++) {
-        const subIndex = baseSubscriberIndex + i;
-        const groupId = `subscriber-${subIndex}`;
-        const consumer = kafka.consumer({ groupId });
+    running = true;
+    const joins: Promise<void>[] = [];
+    for (const sub of subscribers) {
+        positions[sub] = Object.fromEntries(startOffsets.map(p => [p.partition, p.offset]));
+        const consumer = kafka.consumer({ groupId: `${groupPrefix}-sub-${sub}`, maxWaitTimeInMs: 100 });
         await consumer.connect();
-        await consumer.subscribe({ topic: 'sim.sim_db.dbo.billing_record', fromBeginning: false });
+        joins.push(new Promise<void>(resolve => consumer.on(consumer.events.GROUP_JOIN, () => resolve())));
+        await consumer.subscribe({ topic, fromBeginning: false });
+        await consumer.run({ eachMessage: handlerFor(sub) });
         consumers.push(consumer);
     }
-    console.log(`[Consumer Thread ${workerId}] ${assignedSubscribers} Kafka consumers connected`);
+    await Promise.race([Promise.all(joins), new Promise(r => setTimeout(r, 30_000))]);
+    parentPort?.postMessage({ type: 'consumer-ready', workerId, subscribers: subscribers.length });
 }
 
-async function handleMessage({ message }: EachMessagePayload) {
-    if (!isRunning || !pool) return;
-
-    const messageTimestamp = message.timestamp ? parseInt(message.timestamp, 10) : Date.now();
-    
-    let batchId: number | null = null;
-    try {
-        if (message.value) {
-            const payload = JSON.parse(message.value.toString());
-            // Debezium CDC format: payload.after contains the row data
-            if (payload.payload?.after?.batch_id) {
-                batchId = payload.payload.after.batch_id;
-            } else if (payload.after?.batch_id) {
-                batchId = payload.after.batch_id;
-            } else if (payload.batch_id) {
-                batchId = payload.batch_id;
-            }
-        }
-    } catch (e) {
-        // If we can't parse, use a random batch_id as fallback
-        batchId = Math.floor(Math.random() * 100) + 1;
-    }
-
-    if (!batchId) {
-        batchId = Math.floor(Math.random() * 100) + 1;
-    }
-
-    const enrichStart = performance.now();
-    try {
-        const request = pool.request();
-        request.input('batchId', sql.Int, batchId);
-        await request.query(ENRICHMENT_QUERY);
-
-        const enrichEnd = performance.now();
-        const enrichmentLatency = enrichEnd - enrichStart;
-        const e2eLatency = Date.now() - messageTimestamp;
-
-        enrichmentLatencies[latencyIndex] = enrichmentLatency;
-        e2eLatencies[latencyIndex] = e2eLatency;
-        latencyIndex = (latencyIndex + 1) % MAX_LATENCY_HISTORY;
-        if (latencyCount < MAX_LATENCY_HISTORY) latencyCount++;
-
-        messagesConsumed++;
-    } catch (e) {
-        enrichmentsFailed++;
-        console.error(`[Consumer ${workerId}] Enrichment failed:`, e);
-    }
+async function stop() {
+    running = false;
+    await Promise.allSettled(consumers.map(c => c.disconnect()));
+    consumers = [];
+    try { await pool?.close(); } catch { /* ignore */ }
+    pool = null;
+    flush();
+    parentPort?.postMessage({ type: 'consumer-stopped', workerId });
 }
 
-async function startConsuming() {
-    await Promise.all(consumers.map(consumer => 
-        consumer.run({
-            eachMessage: handleMessage
-        })
-    ));
-}
-
-// Listen for messages from main thread
 parentPort?.on('message', async (msg) => {
-    if (msg.type === 'start') {
-        isRunning = true;
-        try {
-            await connectDB();
-            await connectKafka();
-            await startConsuming();
-            parentPort?.postMessage({ type: 'consumer-ready', workerId, assignedSubscribers });
-        } catch (e) {
-            console.error(`[Consumer ${workerId}] Start failed:`, e);
-            parentPort?.postMessage({ type: 'consumer-error', workerId, error: String(e) });
-        }
-    } else if (msg.type === 'stop') {
-        isRunning = false;
-        try {
-            await Promise.all(consumers.map(c => c.disconnect()));
-            consumers = [];
-            if (pool) await pool.close();
-        } catch (e) {
-            console.error(`[Consumer ${workerId}] Cleanup error:`, e);
-        }
-    } else if (msg.type === 'reconnect') {
-        try {
-            await Promise.all(consumers.map(c => c.disconnect()));
-            consumers = [];
-            if (pool) await pool.close();
-        } catch (e) {
-            console.error(`[Consumer ${workerId}] Cleanup before reconnect error:`, e);
-        }
-        try {
-            await connectDB();
-            await connectKafka();
-            if (isRunning) {
-                await startConsuming();
-            }
-        } catch (e) {
-            console.error(`[Consumer ${workerId}] Reconnect failed:`, e);
-        }
-    }
+    if (msg.type === 'stop') await stop();
 });
+
+start().catch(e => parentPort?.postMessage({ type: 'consumer-error', workerId, error: String((e as Error).message || e) }));

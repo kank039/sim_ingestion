@@ -31,3 +31,21 @@ flowchart TD
     Telemetry -->|"Metrics"| Dashboard
     API --- Telemetry
 ```
+
+## Run lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> idle: startup resets pipeline (no connectors, jobs, CDC, trigger)
+    idle --> provisioning: Start (approach N)
+    provisioning --> running: probe write reached the output topic
+    provisioning --> idle: failure (environment torn down, error shown)
+    running --> paused: Pause
+    paused --> running: Resume
+    running --> draining: Stop / Start of another approach
+    paused --> draining: Stop
+    draining --> idle: all committed changes delivered (or no progress for 15s), summary recorded, teardown
+```
+
+Provisioning enables only what approach N needs (see the table in
+[metrics_calculation.md](metrics_calculation.md)); teardown removes all of it again.

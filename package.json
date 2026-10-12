@@ -1,9 +1,12 @@
 {
   "name": "sim-dataingestion",
   "version": "1.0.0",
+  "private": true,
   "scripts": {
-    "dev": "concurrently \"cd simulator && npm start\" \"cd frontend && npm run dev\"",
-    "postinstall": "npm install concurrently"
+    "install:all": "npm install && npm --prefix simulator ci && npm --prefix frontend ci",
+    "dev": "concurrently -n sim,ui \"npm --prefix simulator run dev\" \"npm --prefix frontend run dev\"",
+    "test": "npm --prefix simulator test && npm --prefix frontend run lint",
+    "build": "npm --prefix simulator run build && npm --prefix frontend run build"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

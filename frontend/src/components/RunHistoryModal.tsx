@@ -1,21 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { X, History, Download } from 'lucide-react';
+import { API_BASE } from '../constants';
 
-const API_BASE = 'http://localhost:3001/api';
+interface RunListItem {
+  runId: string;
+  timestamp: string;
+  approach: number;
+  rps: number;
+  elapsedSec: number;
+  recordsModified: number;
+  p95: number;
+}
 
 interface RunHistoryModalProps {
   onClose: () => void;
 }
 
 export const RunHistoryModal: React.FC<RunHistoryModalProps> = ({ onClose }) => {
-  const [runs, setRuns] = useState<any[]>([]);
+  const [runs, setRuns] = useState<RunListItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetch(`${API_BASE}/results`)
       .then(res => res.json())
       .then(data => {
-        setRuns(data);
+        setRuns(Array.isArray(data) ? data : []);
         setLoading(false);
       })
       .catch(err => {
@@ -53,9 +62,9 @@ export const RunHistoryModal: React.FC<RunHistoryModalProps> = ({ onClose }) => 
                 <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
                   <th style={{ padding: '0.5rem' }}>Date</th>
                   <th style={{ padding: '0.5rem' }}>Approach</th>
-                  <th style={{ padding: '0.5rem' }}>RPS</th>
+                  <th style={{ padding: '0.5rem' }}>Target RPS</th>
                   <th style={{ padding: '0.5rem' }}>Duration</th>
-                  <th style={{ padding: '0.5rem' }}>Total Recs</th>
+                  <th style={{ padding: '0.5rem' }}>Committed</th>
                   <th style={{ padding: '0.5rem' }}>p95 Latency</th>
                   <th style={{ padding: '0.5rem' }}>Actions</th>
                 </tr>
@@ -67,7 +76,7 @@ export const RunHistoryModal: React.FC<RunHistoryModalProps> = ({ onClose }) => 
                     <td style={{ padding: '0.5rem' }}>{run.approach}</td>
                     <td style={{ padding: '0.5rem' }}>{run.rps}</td>
                     <td style={{ padding: '0.5rem' }}>{Math.floor(run.elapsedSec / 60)}m {run.elapsedSec % 60}s</td>
-                    <td style={{ padding: '0.5rem' }}>{run.recordsModified.toLocaleString()}</td>
+                    <td style={{ padding: '0.5rem' }}>{(run.recordsModified ?? 0).toLocaleString()}</td>
                     <td style={{ padding: '0.5rem' }}>{run.p95} ms</td>
                     <td style={{ padding: '0.5rem' }}>
                       <a href={`${API_BASE}/results/${run.runId}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-blue)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}>

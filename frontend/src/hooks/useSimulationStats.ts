@@ -1,80 +1,92 @@
-import { useState, useEffect } from 'react';
-import type { SimulationStats, TelemetryPoint } from '../types';
+import { useState, useEffect, useRef } from 'react';
+import type { SimulationStats, TelemetryPoint, SystemLog } from '../types';
+import { API_BASE } from '../constants';
+import { outcomeRates } from '../metrics';
 
-const API_BASE = 'http://localhost:3001/api';
+const MAX_LOGS = 500;
+const MAX_HISTORY = 3600;
+
+function toPoint(data: SimulationStats): TelemetryPoint {
+  const rates = outcomeRates(data);
+  return {
+    time: new Date().toLocaleTimeString(),
+    timestamp: Date.now(),
+    appLatency: data.appLatency,
+    queueLatency: data.queueLatency || 0,
+    p95: data.p95 || 0,
+    p99: data.p99 || 0,
+    cpu: data.dbStats?.cpu || 0,
+    io: data.dbStats?.io || 0,
+    wait_tasks: data.dbStats?.wait_tasks || 0,
+    active_locks: data.dbStats?.active_locks || 0,
+    recordsModified: data.recordsModified || 0,
+    recordsFailed: data.recordsFailed || 0,
+    recordsLate: data.recordsLate || 0,
+    recordsDropped: data.recordsDropped || 0,
+    recordsInKafka: data.recordsInKafka || 0,
+    lag: data.lag || 0,
+    pipelineLatency: data.pipelineLatency?.avg || 0,
+    pipelineP95: data.pipelineLatency?.p95 || 0,
+    actualRps: data.actualRps || 0,
+    targetRps: data.rps || 0,
+    slaRate: rates.slaRate,
+    successRate: rates.successRate,
+    consumerE2eLatency: data.subscriberStats?.avgE2eLatency || 0,
+    consumerEnrichmentLatency: data.subscriberStats?.avgEnrichmentLatency || 0,
+    consumerLag: data.subscriberStats?.consumerLag || 0,
+  };
+}
 
 export function useSimulationStats(addActionLog: (msg: string, level: string) => void) {
   const [stats, setStats] = useState<SimulationStats | null>(null);
+  const [logs, setLogs] = useState<SystemLog[]>([]);
   const [history, setHistory] = useState<TelemetryPoint[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [errorCount, setErrorCount] = useState(0);
+  const runIdRef = useRef<string | null | undefined>(undefined);
+  const logRef = useRef(addActionLog);
+  logRef.current = addActionLog;
 
   useEffect(() => {
     let eventSource: EventSource | null = null;
     let timeout: ReturnType<typeof setTimeout>;
-    
+
     const connect = () => {
       eventSource = new EventSource(`${API_BASE}/stats/stream`);
-      
+
       eventSource.onopen = () => {
         setIsConnected(true);
         setErrorCount(0);
       };
-      
-      eventSource.onmessage = (e) => {
-        try {
-          const data: SimulationStats = JSON.parse(e.data);
-          
-          setStats(prevStats => {
-              if (prevStats?.runId !== data.runId) {
-                  setHistory([]);
-                  addActionLog('New run detected, clearing history.', 'info');
-              }
-              if (data.newLogs && data.newLogs.length > 0) {
-                  data.logs = [...(prevStats?.logs || []), ...data.newLogs].slice(-500);
-              } else {
-                  data.logs = prevStats?.logs || [];
-              }
-              return data;
-          });
 
-          if (data.isRunning) {
-            setHistory(prev => {
-              const actualRps = prev.length > 0 ? Math.max(0, (data.recordsModified || 0) - prev[prev.length - 1].recordsModified) : 0;
-                const totalRecords = (data.recordsModified || 0) + (data.recordsFailed || 0) + (data.recordsLate || 0);
-                const slaRate = totalRecords > 0 ? parseFloat(((data.recordsModified / totalRecords) * 100).toFixed(2)) : 100;
-                const successRate = totalRecords > 0 ? parseFloat((((data.recordsModified + data.recordsLate) / totalRecords) * 100).toFixed(2)) : 100;
-                
-                const newHistory = [...prev, {
-                  time: new Date().toLocaleTimeString(),
-                  timestamp: Date.now(),
-                  appLatency: data.appLatency,
-                  queueLatency: data.queueLatency || 0,
-                  p95: data.p95 || 0,
-                  p99: data.p99 || 0,
-                  cpu: data.dbStats?.cpu || 0,
-                  io: data.dbStats?.io || 0,
-                  wait_tasks: data.dbStats?.wait_tasks || 0,
-                  active_locks: data.dbStats?.active_locks || 0,
-                  recordsModified: data.recordsModified || 0,
-                  recordsFailed: data.recordsFailed || 0,
-                  recordsLate: data.recordsLate || 0,
-                  recordsInKafka: data.recordsInKafka || 0,
-                  lag: data.lag || 0,
-                  actualRps,
-                  slaRate,
-                  successRate,
-                  consumerE2eLatency: data.subscriberStats?.avgE2eLatency || 0,
-                  consumerEnrichmentLatency: data.subscriberStats?.avgEnrichmentLatency || 0
-                }];
-              return newHistory.slice(-3600);
-            });
-          }
-        } catch(err) {
-          console.error("SSE parse error", err);
+      eventSource.onmessage = (e) => {
+        let data: SimulationStats;
+        try {
+          data = JSON.parse(e.data);
+        } catch (err) {
+          console.error('SSE parse error', err);
+          return;
+        }
+
+        // A new run starts a fresh chart; the previous run's history stays until then.
+        if (data.runId && runIdRef.current !== undefined && runIdRef.current !== data.runId && data.phase !== 'idle') {
+          setHistory([]);
+          logRef.current('New run detected, clearing chart history.', 'info');
+        }
+        if (data.runId) runIdRef.current = data.runId;
+        else if (runIdRef.current === undefined) runIdRef.current = null;
+
+        if (data.newLogs && data.newLogs.length > 0) {
+          const incoming = data.newLogs;
+          setLogs(prev => [...incoming, ...prev].slice(0, MAX_LOGS));
+        }
+        setStats(data);
+
+        if (data.phase === 'running' || data.phase === 'paused' || data.phase === 'draining') {
+          setHistory(prev => [...prev, toPoint(data)].slice(-MAX_HISTORY));
         }
       };
-      
+
       eventSource.onerror = () => {
         setIsConnected(false);
         setErrorCount(prev => prev + 1);
@@ -82,9 +94,9 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
         timeout = setTimeout(connect, 2000);
       };
     };
-    
+
     connect();
-    
+
     return () => {
       eventSource?.close();
       clearTimeout(timeout);
@@ -95,9 +107,9 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
     try {
       const res = await fetch(`${API_BASE}/logs/clear`, { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
-      if (stats) setStats({ ...stats, logs: [] });
+      setLogs([]);
       addActionLog('Logs cleared successfully.', 'info');
-    } catch(e) {
+    } catch (e) {
       addActionLog(`Clear logs failed: ${String(e)}`, 'error');
     }
   };
@@ -119,5 +131,5 @@ export function useSimulationStats(addActionLog: (msg: string, level: string) =>
     }
   };
 
-  return { stats, history, isConnected, errorCount, clearLogs, reconnect };
+  return { stats, logs, history, isConnected, errorCount, clearLogs, reconnect };
 }

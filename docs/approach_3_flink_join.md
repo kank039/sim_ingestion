@@ -21,6 +21,17 @@ flowchart TD
 **Description:**
 Dual writes populate domain and enrichment tables separately. Changes are streamed via CDC into Kafka topics. Apache Flink performs a stateful stream-to-stream join to enrich the events in real-time. This can face issues with state TTL and late-arriving data.
 
+**In the simulator:**
+- The writer commits the `billing_record` change, then (in a second, independent transaction) inserts an
+  `enrichment_requests` row carrying the same `change_token` and operation. If that second insert fails the
+  billing change is already committed; the run counts it as a failure and raises a *DUAL WRITE INCONSISTENCY* alert.
+- One Debezium connector captures both tables. The Flink job in `flink/sql/approach3.sql` (Kafka SQL connector,
+  baked into the `sim-flink` image) interval-joins the two CDC streams on `change_token` + operation within
+  ±30s of commit time and writes one row per operation to `sim.approach3.enriched`.
+- The simulator submits the job when an Approach 3 run starts (`sql-client.sh -f` inside the JobManager) and
+  cancels it when the run ends, so Flink does no work during other approaches.
+- Changes that miss the join window never produce output and remain visible as pipeline lag.
+
 ### Pros:
 - **Highly Scalable**: Flink provides a highly robust, distributed state backend capable of processing massive volumes of events.
 - **Complete Decoupling**: The database is completely offloaded from any enrichment responsibility; the streaming layer handles all complex event processing.

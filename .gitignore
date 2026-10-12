@@ -31,9 +31,8 @@ build/
 *.sw?
 .DS_Store
 
-# Simulator specific
-simulator/out.log
-out.log
+# CSV output of the PowerShell runners
+output/
 
 # TypeScript
 *.tsbuildinfo

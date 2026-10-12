@@ -28,3 +28,12 @@ Debezium captures and pushes raw changes immediately. Downstream consumer worker
 ### Cons:
 - **Increased Database Load**: Shifting enrichment queries to the consumer side can cause heavy read traffic on the database (mitigated by using Read Replicas).
 - **Idempotency Requirements**: Because consumers handle enrichment and final delivery, they must carefully handle duplicate events and implement strong idempotency.
+
+### In the simulator
+- Each subscriber is its own Kafka consumer group (so every subscriber processes every event), hosted on up
+  to 4 worker threads. Consumer groups are fresh per run and start at the run's first offset.
+- The enrichment JOIN is keyed by the event's billing id and batch id (`before` image for deletes):
+  `invoice_batch → subscriber_plan`, `billing_record` by id, `subscriber_usage` by batch, `rate_schedule` by plan
+  and usage type. Tombstones are skipped.
+- Reported: enrichment latency, commit → enriched latency (from `source.ts_ms`), consumer lag per run, failures
+  and lookups that returned no reference data.

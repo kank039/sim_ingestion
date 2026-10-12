@@ -48,7 +48,7 @@ The host machine comfortably supports the full stack. However, the hard limits f
 - **Theoretical Hard Limit:** Flink must maintain state (in-memory or RocksDB) to join asynchronous streams. With only 1.5GB of RAM allocated to the TaskManager, state blowup is a massive risk. If streams arrive out of order or if the join window is large, the JVM will hit OutOfMemory (OOM) errors or aggressively garbage collect, dropping throughput to near zero. State TTL limits also mean late-arriving data will fail to join.
 - **Metrics to Watch:**
   - **Flink TaskManager Memory:** Approaching 100% means imminent crash or extreme GC pauses.
-  - **Late Records (`recordsLate`):** Events that missed the join window due to state expiration or skew.
+  - **Pipeline Lag / Final lag after drain:** Changes that never produced a join result (missed the ±30s window, or a failed dual write) stay in the lag forever.
   - **Flink TaskManager CPU:** Will spike if GC is thrashing due to memory pressure.
 
 ## 4. JDBC SMT (Interceptor)
@@ -57,7 +57,7 @@ The host machine comfortably supports the full stack. However, the hard limits f
 - **Primary Bottleneck:** Network I/O, SQL Server Concurrent Connections, and Debezium CPU (1.5 Cores).
 - **Theoretical Hard Limit:** This is an anti-pattern for high-throughput CDC. The synchronous network hop (N+1 query problem) per event limits throughput severely. Furthermore, SMTs are vulnerable to **Race Conditions**: by the time the SMT queries SQL Server, the data might have already mutated again (especially with rapid sequential updates). Throughput will likely cap at **a few hundred RPS**.
 - **Metrics to Watch:**
-  - **Flaw Alerts:** Look out for "RACE CONDITION DETECTED".
+  - **Enrichment misses:** Events whose JDBC lookup found no invoice raise an "ENRICHMENT MISS" alert. (Stale-but-present lookup results cannot be detected without mutating reference data during the run.)
   - **Capture Lag Ms:** Will skyrocket as Debezium pauses CDC processing to execute synchronous database queries.
   - **SQL Server Memory & CPU:** Serving thousands of individual singleton queries from Debezium will exhaust resources quickly.
 

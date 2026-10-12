@@ -1,79 +1,98 @@
 import { useState, useCallback, useRef } from 'react';
+import { API_BASE } from '../constants';
 
-const API_BASE = 'http://localhost:3001/api';
+/** Settings that can be changed while a run is active (sent to /simulate/update). */
+export interface LiveSettings {
+  rps: number;
+  gradual: boolean;
+  endRps: number;
+  rampStepRps: number;
+  timeoutMs: number;
+  insertsOnly: boolean;
+  insertWeight: number;
+  updateWeight: number;
+  deleteWeight: number;
+}
+
+async function post(path: string, body?: unknown) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    let message = await res.text();
+    try { message = JSON.parse(message).error || message; } catch { /* plain text */ }
+    throw new Error(message);
+  }
+  return res.json().catch(() => ({}));
+}
 
 export function useSimulationControl(addActionLog: (msg: string, level: string) => void, initialApproach = 1, initialRps = 10) {
   const [approach, setApproach] = useState(initialApproach);
   const [rps, setRps] = useState(initialRps);
   const [endRps, setEndRps] = useState(5000);
+  const [rampStepRps, setRampStepRps] = useState(50);
   const [timeoutMs, setTimeoutMs] = useState(3000);
   const [isGradual, setIsGradual] = useState(false);
-  const [isCleaning, setIsCleaning] = useState(false);
   const [isCheckingHealth, setIsCheckingHealth] = useState(false);
   const [isInsertsOnly, setIsInsertsOnly] = useState(true);
-  
+  const [resetData, setResetData] = useState(true);
+
   const [cardinality, setCardinality] = useState(100);
   const [insertWeight, setInsertWeight] = useState(0.5);
   const [updateWeight, setUpdateWeight] = useState(0.3);
   const [deleteWeight, setDeleteWeight] = useState(0.2);
   const [numSubscribers, setNumSubscribers] = useState(5);
-  
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  const updateSim = useCallback((newApproach: number, newRps: number, gradual: boolean, maxRps: number, isRunning: boolean, newTimeoutMs: number, insertsOnly: boolean, card: number, wIns: number, wUpd: number, wDel: number) => {
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  /** Applies live setting changes to the active run without restarting it. */
+  const updateLive = useCallback((settings: LiveSettings, isRunning: boolean) => {
     if (!isRunning) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    
     debounceRef.current = setTimeout(async () => {
       try {
-        const res = await fetch(`${API_BASE}/simulate/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approach: newApproach, rps: newRps, gradual, endRps: maxRps, timeoutMs: newTimeoutMs, insertsOnly, cardinality: card, insertWeight: wIns, updateWeight: wUpd, deleteWeight: wDel, numSubscribers })
-        });
-        if (!res.ok) throw new Error(await res.text());
-        addActionLog(`Updated simulation (Approach ${newApproach}, RPS ${newRps})`, 'info');
+        await post('/simulate/update', settings);
+        addActionLog(`Updated run (target ${settings.rps} RPS${settings.gradual ? ` ramping to ${settings.endRps}` : ''}, timeout ${settings.timeoutMs}ms)`, 'info');
       } catch (err) {
-        addActionLog(`Failed to update simulation: ${String(err)}`, 'error');
+        addActionLog(`Failed to update run: ${String(err)}`, 'error');
       }
     }, 250);
   }, [addActionLog]);
 
-  const handleStartStop = async (isRunning: boolean) => {
+  const handleStartStop = async (isActive: boolean) => {
     try {
-      if (isRunning) {
-        addActionLog('Stopping simulation...', 'info');
-        let res = await fetch(`${API_BASE}/simulate/stop`, { method: 'POST' });
-        if (!res.ok) throw new Error(await res.text());
-        addActionLog('Simulation stopped successfully.', 'info');
+      if (isActive) {
+        addActionLog('Stopping simulation (draining pipeline, then tearing down)...', 'info');
+        await post('/simulate/stop');
       } else {
-        addActionLog('Starting simulation...', 'info');
-        const res = await fetch(`${API_BASE}/simulate/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approach, rps, gradual: isGradual, endRps, timeoutMs, insertsOnly: isInsertsOnly, cardinality, insertWeight, updateWeight, deleteWeight, numSubscribers })
+        addActionLog(`Starting Approach ${approach}: provisioning its pipeline...`, 'info');
+        await post('/simulate/start', {
+          approach, rps, gradual: isGradual, endRps, rampStepRps, timeoutMs, insertsOnly: isInsertsOnly,
+          cardinality, insertWeight, updateWeight, deleteWeight, numSubscribers, resetData,
         });
-        if (!res.ok) throw new Error(await res.text());
-        addActionLog('Simulation started successfully.', 'info');
       }
     } catch (e) {
       addActionLog(`Action failed: ${String(e)}`, 'error');
     }
   };
 
-  const handleClean = async () => {
+  const action = (path: string, start: string, done: string) => async () => {
     try {
-      setIsCleaning(true);
-      addActionLog('Cleaning database, Kafka topics, and caches...', 'info');
-      const res = await fetch(`${API_BASE}/simulate/clean`, { method: 'POST' });
-      if (!res.ok) throw new Error(await res.text());
-      setIsCleaning(false);
-      addActionLog('System cleaned successfully.', 'info');
+      addActionLog(start, 'info');
+      await post(path);
+      addActionLog(done, 'info');
     } catch (e) {
-      setIsCleaning(false);
-      addActionLog(`Clean failed: ${String(e)}`, 'error');
+      addActionLog(`${start.replace(/\.\.\.$/, '')} failed: ${String(e)}`, 'error');
     }
   };
+
+  const handleClean = action('/simulate/clean', 'Cleaning: tearing down pipeline and truncating write tables...', 'System cleaned.');
+  const handleCleanCdc = action('/simulate/clean-cdc', 'Disabling CDC on all simulator tables...', 'CDC change tables dropped.');
+  const handleCleanKafka = action('/simulate/clean-kafka', 'Purging simulator Kafka topics...', 'Kafka topics purged.');
+  const handlePause = action('/simulate/pause', 'Pausing simulation...', 'Simulation paused.');
+  const handleResume = action('/simulate/resume', 'Resuming simulation...', 'Simulation resumed.');
 
   const handleHealthCheck = async () => {
     try {
@@ -81,12 +100,11 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
       addActionLog('Running system health checks...', 'info');
       const res = await fetch(`${API_BASE}/system/health-check`);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || await res.text());
-      
+      if (!res.ok) throw new Error(data.error || 'Health check failed');
       if (data.healthy) {
-        addActionLog(`System is healthy! (CDC rows: ${data.cdc_rows})`, 'info');
+        addActionLog(`System is healthy and matches the expected ${data.expected ? `Approach ${data.expected.approach}` : 'idle'} state.`, 'info');
       } else {
-        addActionLog(`System health degraded: ${data.errors.join(', ')}`, 'warning');
+        addActionLog(`System health degraded: ${data.errors.join('; ')}`, 'warn');
       }
     } catch (e) {
       addActionLog(`Health check failed: ${String(e)}`, 'error');
@@ -95,73 +113,21 @@ export function useSimulationControl(addActionLog: (msg: string, level: string) 
     }
   };
 
-  const handleCleanCdc = async () => {
-    try {
-      addActionLog('Hard truncating CDC tables...', 'info');
-      const res = await fetch(`${API_BASE}/simulate/clean-cdc`, { method: 'POST' });
-      if (!res.ok) throw new Error(await res.text());
-      addActionLog('CDC tables truncated successfully.', 'info');
-    } catch (e) {
-      addActionLog(`CDC cleanup failed: ${String(e)}`, 'error');
-    }
-  };
-
-  const handleCleanKafka = async () => {
-    try {
-      addActionLog('Purging Kafka topics (retention override)...', 'info');
-      const res = await fetch(`${API_BASE}/simulate/clean-kafka`, { method: 'POST' });
-      if (!res.ok) throw new Error(await res.text());
-      addActionLog('Kafka topics purged successfully.', 'info');
-    } catch (e) {
-      addActionLog(`Kafka purge failed: ${String(e)}`, 'error');
-    }
-  };
-
-  const handlePause = async () => {
-    try {
-      addActionLog('Pausing simulation...', 'info');
-      const res = await fetch(`${API_BASE}/simulate/pause`, { method: 'POST' });
-      if (!res.ok) throw new Error(await res.text());
-      addActionLog('Simulation paused successfully.', 'info');
-    } catch (e) {
-      addActionLog(`Pause failed: ${String(e)}`, 'error');
-    }
-  };
-
-  const handleResume = async () => {
-    try {
-      addActionLog('Resuming simulation...', 'info');
-      const res = await fetch(`${API_BASE}/simulate/resume`, { method: 'POST' });
-      if (!res.ok) throw new Error(await res.text());
-      addActionLog('Simulation resumed successfully.', 'info');
-    } catch (e) {
-      addActionLog(`Resume failed: ${String(e)}`, 'error');
-    }
-  };
-
   const handleInduceFailure = async () => {
-    if (window.confirm("Are you sure you want to forcefully restart the Debezium container to simulate a failure?")) {
-      try {
-        addActionLog('Inducing hard failure...', 'error');
-        const res = await fetch(`${API_BASE}/system/induce-failure`, { method: 'POST' });
-        if (!res.ok) throw new Error(await res.text());
-        addActionLog('Hard failure induced.', 'info');
-      } catch (e) {
-        addActionLog(`Failure induction failed: ${String(e)}`, 'error');
-      }
-    }
+    if (!window.confirm('Restart the Debezium container to simulate a hard CDC failure?')) return;
+    await action('/system/induce-failure', 'Inducing hard failure...', 'Hard failure induced.')();
   };
 
   return {
     approach, setApproach,
     rps, setRps,
     endRps, setEndRps,
+    rampStepRps, setRampStepRps,
     timeoutMs, setTimeoutMs,
-    isGradual,
-    setIsGradual,
-    isCleaning,
+    isGradual, setIsGradual,
     isCheckingHealth,
-    updateSim, handleStartStop, handlePause, handleResume, handleClean, handleHealthCheck, handleCleanCdc, handleCleanKafka,
+    resetData, setResetData,
+    updateLive, handleStartStop, handlePause, handleResume, handleClean, handleHealthCheck, handleCleanCdc, handleCleanKafka,
     isInsertsOnly, setIsInsertsOnly,
     cardinality, setCardinality,
     insertWeight, setInsertWeight,

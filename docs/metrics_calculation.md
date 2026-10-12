@@ -1,104 +1,116 @@
 # Metrics Calculations & Formulation
 
-This document details how each metric displayed on the dashboard is formulated, calculated, and fetched from the underlying systems (SQL Server, Kafka, and the Simulator App).
+How every number on the dashboard (and in the CSV exports) is produced. All of it is computed in the
+simulator backend; the frontend only formats it (shared math lives in `frontend/src/metrics.ts`).
 
-## 1. Application & Simulator Metrics
+## 0. Run lifecycle (why the numbers are comparable)
 
-### Actual RPS (Requests Per Second)
-- **Calculation:** `Math.max(0, current_recordsModified - previous_recordsModified)`
-- **Location:** Frontend (`useSimulationStats.ts`)
-- **Description:** The delta of `Records Modified` between the current 1-second polling interval and the previous one.
+Every run goes `idle → provisioning → running ⇄ paused → draining → idle`.
 
-### DB Latency (Avg, p95, p99)
-- **Calculation:** Measures the `performance.now()` delta specifically for the execution of the SQL operations (e.g., `INSERT/UPDATE/DELETE`).
-- **Location:** Backend (`simulation.ts`)
-- **Description:** Represents the raw execution time of queries against SQL Server. The backend collects all latencies within a 1-second batch, sorts them, and extracts the 50th, 95th, and 99th percentiles, as well as the average.
+**Provisioning** makes the environment match exactly one approach before any measurement starts:
 
-### Queue Latency
-- **Calculation:** `waitTime = performance.now() - startWait` (measured before entering the DB execution phase).
-- **Location:** Backend (`simulation.ts`)
-- **Description:** The time a request spends waiting in the Node.js concurrency queue (the limiter) before a slot is available to execute the DB query.
+| | A1 Triggers | A2 Outbox | A3 Flink | A4 SMT | A5 Consumers |
+|---|---|---|---|---|---|
+| `trg_billing_record_cdc` | enabled | disabled | disabled | disabled | disabled |
+| CDC enabled on | `cdc_events_shadow` | `outbox_events` | `billing_record`, `enrichment_requests` | `billing_record` | `billing_record` |
+| Debezium connector | fresh, those tables only | same | same | same + `InvoiceLookup` SMT | same |
+| Flink job | none | none | `sim-approach3-join` | none | none |
+| Consumer threads | none | none | none | none | N subscribers |
+| Tracked topic | `…cdc_events_shadow` | `…outbox_events` | `sim.approach3.enriched` | `…billing_record` | `…billing_record` |
 
-### Records Modified
-- **Calculation:** Accumulated count of `limit()` operations that successfully completed `executeOperation()` *before* the `timeoutMs` threshold was reached.
-- **Location:** Backend (`simulation.ts` -> `index.ts`)
+Anything else (connectors from other runs or older versions, Flink jobs, consumer threads, CDC on other
+tables, the trigger) is removed first. A new connector is created per run with `snapshot.mode=no_data`, so
+it never replays old rows. The write tables are truncated (unless *Reset write tables* is off) and
+reference data is seeded for the chosen cardinality. Finally a **probe** write is sent through the real
+path and the run only starts once it shows up on the tracked topic: the pipeline is proven live and any
+backlog from earlier activity has been flushed.
 
-### Late Records
-- **Calculation:** Accumulated count of operations that timed out (either by waiting in the queue longer than `timeoutMs` or by the DB taking longer than `timeoutMs` to respond).
-- **Location:** Backend (`simulation.ts` -> `index.ts`)
+**Draining** (after Stop): load stops, in-flight writes finish, and the simulator waits until every committed
+change has been delivered (and, for A5, consumed) or until no progress is made for 15s. The run summary is
+taken at that point, then everything is torn down, leaving no trigger, CDC, connector, job or thread running.
 
-### Failed Records
-- **Calculation:** Accumulated count of operations that threw a hard error (e.g., deadlock, connection drop), explicitly excluding `TIMEOUT` errors.
-- **Location:** Backend (`simulation.ts` -> `index.ts`)
+## 1. Load generator
 
-### SLA %
-- **Calculation:** `(Records Modified / Total Records) * 100` 
-  *(where `Total Records = Records Modified + Failed Records + Late Records`)*
-- **Location:** Frontend (`useSimulationStats.ts` / `MetricsGrid.tsx`)
-- **Description:** The percentage of records that successfully completed within the strict timeout SLA.
+### Target / Issued / Actual RPS
+- **Target** (`rps`): the configured rate (ramped by `rampStepRps` per second when gradual; paused while paused).
+- **Pacing:** each of the 8 writer threads gets `target / 8` (fractional rates are fine) and an open-loop pacer
+  issues `floor(elapsed × rate)` operations in total, so 10 RPS really is 10 RPS.
+- **Issued RPS** (`issuedRps`) and **Actual RPS** (`actualRps`, operations committed per second) are
+  computed from cumulative counters over a 5-second rolling window.
 
-### Success %
-- **Calculation:** `((Records Modified + Late Records) / Total Records) * 100`
-- **Location:** Frontend (`useSimulationStats.ts` / `MetricsGrid.tsx`)
-- **Description:** The percentage of records that successfully reached the DB (even if they were late), meaning they didn't throw a hard failure.
+### Operation outcomes
+Each issued operation ends in exactly one bucket:
+- **Committed on time** (`recordsModified`): committed, queue wait + DB time ≤ SLA timeout.
+- **Late** (`recordsLate`): committed, but slower than the SLA timeout. Late operations are *not* abandoned;
+  they are real commits and produce change events.
+- **Failed** (`recordsFailed`): the DB call errored. For A3 this includes a dual write whose second insert
+  failed after the billing change committed (also counted in `partialWrites`).
+- **Dropped** (`recordsDropped`): shed by the generator without touching the DB (writer queue full, or
+  waited in the queue longer than the SLA timeout).
 
----
+`recordsCommitted = recordsModified + recordsLate`.
 
-## 2. SQL Server Metrics
+- **SLA %** = `recordsModified / (modified + late + failed + dropped)`
+- **Success %** = `(modified + late) / (modified + late + failed + dropped)`
 
-### SQL Server CPU (1m avg)
-- **Calculation:** 
-  ```sql
-  SELECT TOP 1 record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') 
-  FROM sys.dm_os_ring_buffers 
-  WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'
-  ```
-- **Location:** Backend (`db.ts`)
-- **Description:** Not an instantaneous snapshot, but a natively smoothed 1-minute average produced by SQL Server's `SystemHealth` ring buffer.
+### Write path
+One round trip per operation (two for A3's dual write). Update/delete pick the first row of the batch; if
+none exists the operation inserts instead, so **every committed operation changes exactly one row** and
+produces exactly one change event on the tracked topic. `opsApplied` reports what actually happened
+(`c`/`u`/`d`). The write path avoids table variables and temp tables, which would contend on tempdb.
 
-### SQL Server I/O (MB/s)
-- **Calculation:** 
-  ```sql
-  SELECT SUM(num_of_bytes_read + num_of_bytes_written) / 1024 / 1024 as TotalIOMB
-  FROM sys.dm_io_virtual_file_stats(DB_ID('sim_db'), NULL);
-  ```
-- **Location:** Backend (`db.ts`)
-- **Description:** Takes the cumulative I/O bytes read/written, converts to MB, and compares the delta between the current and previous polling interval divided by the elapsed seconds to yield `MB/s`.
+### DB latency (avg, p50, p95, p99) and queue latency
+- Each writer thread records DB execution time and queue wait into log-bucketed histograms (~1% precision).
+- Histograms from all threads are **merged** before percentiles are taken, so p95/p99 are true percentiles
+  of all operations (the old version averaged per-thread percentiles, which is not a percentile).
+- Dashboard values are per 1-second window; the run summary uses the whole run.
 
-### DB Wait Tasks
-- **Calculation:** `SELECT count(*) FROM sys.dm_os_waiting_tasks WHERE session_id > 50`
-- **Location:** Backend (`db.ts`)
-- **Description:** The instantaneous number of active user sessions (ID > 50) currently suspended and waiting on a resource (like a lock or I/O).
+## 2. Pipeline metrics
 
-### Active DB Locks
-- **Calculation:** `SELECT count(*) FROM sys.dm_tran_locks WHERE request_session_id > 50 AND request_mode IN ('X', 'U', 'IX')`
-- **Location:** Backend (`db.ts`)
-- **Description:** The instantaneous count of active Exclusive, Update, and Intent-Exclusive locks held by user sessions.
+### Events delivered (`recordsInKafka`)
+A tracker thread consumes the run's tracked topic starting from the exact partition offsets captured at run
+start (its consumer group is pre-committed at those offsets) and counts change events, excluding tombstones.
 
----
+### Pipeline lag (`lag`)
+`recordsCommitted − recordsInKafka`: committed changes not yet on the approach's output topic. Because the
+count is per run, per topic and exact, the final lag after draining should be 0; anything else is lost data.
 
-## 3. Pipeline & Kafka Metrics
+### Commit → topic latency (`pipelineLatency`)
+For every delivered event: `now − source.ts_ms` (the source transaction's commit time from Debezium; for A3
+the commit time carried through the Flink join). Shown as avg/p95 over a 5-second rolling window because
+SQL Server CDC delivers in capture-job bursts. `captureLagMs` is kept as an alias of the average.
 
-### Records in Kafka
-- **Calculation:** `Sum(Partition High Offsets) - baselineKafkaOffset`
-- **Location:** Backend (`index.ts`)
-- **Description:** The simulator queries the Kafka Admin Client (`admin.fetchTopicOffsets`) for the target topic. It calculates the sum of all partition `high` offsets and subtracts the baseline offset recorded when the simulation started. 
+> SQL Server's CDC capture job polls the log every 5s by default, which dominates this latency for every
+> approach equally. Lower it with `sys.sp_cdc_change_job @job_type='capture', @pollinginterval=1` if needed.
 
-### Pipeline Lag
-- **Calculation:** `Math.max(0, (Records Modified + Late Records) - Records in Kafka)`
-- **Location:** Backend (`index.ts`)
-- **Description:** The difference between the total expected records (anything successfully sent to the DB, on time or late) and the actual records that have been emitted by Debezium into Kafka.
+### Alerts (`flawAlert`)
+Only raised for conditions that were actually observed:
+- **PIPELINE BACKLOG**: lag exceeds `max(10 × target RPS, 5000)`.
+- **ENRICHMENT MISS** (A4): the SMT's JDBC lookup returned no invoice for an event.
+- **DUAL WRITE INCONSISTENCY** (A3): a billing change committed without its enrichment request.
 
----
+## 3. Consumer enrichment metrics (Approach 5)
+- **Enrichment latency:** time of the multi-table JOIN, keyed by the billing id and batch id from the event
+  (`before` for deletes; tombstones are skipped, never replaced with a random id).
+- **E2E latency:** `now − source.ts_ms` after enrichment completes (commit → enriched).
+- **Consumer lag:** for every subscriber and partition, `topic end offset − next offset to process`, summed.
+- Each subscriber is its own consumer group, so every subscriber processes every event.
 
-## 4. Consumer Enrichment Metrics (Approach 5)
+## 4. SQL Server metrics
+All DMV reads run as one batch per second in a background loop that never overlaps itself:
+CPU (`dm_os_ring_buffers`, ~1-minute smoothed), I/O MB/s (delta of `dm_io_virtual_file_stats`), waiting tasks,
+X/U/IX locks, log space used, page life expectancy, tempdb space **in use** (unallocated space is excluded),
+and active connections.
 
-### Consumer E2E (End-to-End) Latency
-- **Calculation:** `Current Timestamp - Kafka Message Timestamp`
-- **Location:** Backend (`consumer-worker.ts`)
-- **Description:** The total time elapsed from when Debezium published the event to Kafka to when the Node.js consumer finished executing the read-side enrichment.
+## 5. Container metrics
+Docker Engine API (`/containers/{id}/stats?one-shot=true`), CPU computed from consecutive samples and split
+into per-core bars using each container's real CPU limit (`HostConfig.NanoCpus`). Memory excludes page cache.
 
-### Consumer Enrichment Latency
-- **Calculation:** The raw execution time of the multi-table JOIN executed via `mssql` in the consumer worker.
-- **Location:** Backend (`consumer-worker.ts`)
-- **Description:** Measures the cost of running read-side JOINs to enrich the raw CDC payload.
+## 6. Verification (`POST /api/simulate/verify`)
+Re-reads the run's events on the tracked topic (start offsets → current end) and reports:
+- **missing**: committed changes with no event;
+- **duplicates**: the same source change (commit LSN, change LSN, serial no; or change token + op for A3)
+  delivered more than once;
+- **key-order violations**: within one message key, a source log position going backwards;
+- **entities spread across partitions**: entities (billing record / aggregate) whose events landed on more
+  than one partition, meaning a consumer cannot rely on per-entity ordering.

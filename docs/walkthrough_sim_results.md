@@ -1,5 +1,9 @@
 # Simulation Results: Hard Limits and Metrics
 
+> **Outdated numbers.** These results were produced before the metric and isolation fixes (see CHANGELOG):
+> the generator did not hit its target rate, every approach also paid for the Approach 1 trigger and CDC on all
+> tables, and Approaches 3/4 were simulated in the writer. Re-run `scripts/auto_rampup_simulation.ps1` for valid figures.
+
 I have successfully executed the automated simulation script with a gradual ramp-up to determine the hard limits for each data ingestion approach. The script systematically tested each architecture, gradually increasing the Requests Per Second (RPS) until a critical failure condition was met (Success Rate < 80%, Service Degradation, or Flaw Detection).
 
 ## Summary of Results

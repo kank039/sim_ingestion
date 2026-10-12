@@ -4,7 +4,7 @@ import './App.css';
 
 import { useSimulationStats } from './hooks/useSimulationStats';
 import { useSimulationControl } from './hooks/useSimulationControl';
-import { APPROACHES } from './constants';
+import { API_BASE, approachName } from './constants';
 
 import { ControlPanel } from './components/ControlPanel';
 import { SystemHealth } from './components/SystemHealth';
@@ -14,7 +14,7 @@ import { SystemLogs } from './components/SystemLogs';
 import { RunSummaryModal } from './components/RunSummaryModal';
 import { RunHistoryModal } from './components/RunHistoryModal';
 import { DataFlowModal } from './components/DataFlowModal';
-import type { SystemLog } from './types';
+import type { SystemLog, RunSummary, TelemetryPoint } from './types';
 
 
 
@@ -24,11 +24,11 @@ function App() {
     setLocalLogs(prev => [{ time: new Date().toLocaleTimeString(), message, level, timestamp: Date.now() }, ...prev].slice(0, 100));
   }, []);
 
-  const { stats, history, isConnected, errorCount, clearLogs, reconnect } = useSimulationStats(addActionLog);
+  const { stats, logs: serverLogs, history, isConnected, errorCount, clearLogs, reconnect } = useSimulationStats(addActionLog);
   const {
-    approach, setApproach, rps, setRps, endRps, setEndRps,
-    timeoutMs, setTimeoutMs,
-    isGradual, setIsGradual, isCleaning, isCheckingHealth, updateSim, handleStartStop, handlePause, handleResume, handleClean, handleHealthCheck, handleCleanCdc, handleCleanKafka,
+    approach, setApproach, rps, setRps, endRps, setEndRps, rampStepRps, setRampStepRps,
+    timeoutMs, setTimeoutMs, resetData, setResetData,
+    isGradual, setIsGradual, isCheckingHealth, updateLive, handleStartStop, handlePause, handleResume, handleClean, handleHealthCheck, handleCleanCdc, handleCleanKafka,
     isInsertsOnly, setIsInsertsOnly,
     cardinality, setCardinality,
     insertWeight, setInsertWeight,
@@ -63,7 +63,7 @@ function App() {
   const [selectedChartMetrics, setSelectedChartMetrics] = useState<Record<string, boolean>>(() => {
     const saved = localStorage.getItem('selectedChartMetrics');
     return saved ? JSON.parse(saved) : {
-      appLatency: true, cpu: true, io: true, recordsModified: false, recordsInKafka: false, lag: false, recordsFailed: false, recordsLate: false, slaRate: false, successRate: false, consumerE2eLatency: true, consumerEnrichmentLatency: true
+      appLatency: true, actualRps: true, pipelineLatency: true, cpu: true, io: false, recordsModified: false, recordsInKafka: false, lag: true, recordsFailed: false, recordsLate: false, recordsDropped: false, slaRate: false, successRate: false, consumerE2eLatency: true, consumerEnrichmentLatency: true, consumerLag: false
     };
   });
 
@@ -79,16 +79,22 @@ function App() {
     setVisibleComponents(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const phase = stats?.phase ?? 'starting';
+  const isIdle = phase === 'idle';
+  const isCleaning = phase === 'cleaning';
+  const flawAlert = stats?.flawAlert || null;
+  // While a run exists, show the approach the server is actually running, not the local selection.
+  const displayedApproach = !isIdle && stats?.approach ? stats.approach : approach;
+
   const downloadCSV = () => {
     if (history.length === 0) return;
     const header = Object.keys(history[0]).join(',');
     const rows = history.map(obj => Object.values(obj).join(',')).join('\n');
     const csv = `${header}\n${rows}`;
     
-    const approachData = APPROACHES.find(a => a.id === approach);
-    const approachName = approachData ? approachData.name.replace(/[^a-zA-Z0-9]/g, '_') : 'unknown';
+    const safeName = approachName(displayedApproach).replace(/[^a-zA-Z0-9]/g, '_');
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `sim_approach_${approach}_${approachName}_${timestamp}.csv`;
+    const fileName = `sim_approach_${displayedApproach}_${safeName}_${timestamp}.csv`;
 
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
@@ -99,35 +105,37 @@ function App() {
     window.URL.revokeObjectURL(url);
   };
 
-  const currentStats = history.length > 0 
-    ? history[history.length - 1] 
-    : { time: '', timestamp: 0, appLatency: 0, cpu: 0, io: 0, recordsModified: 0, recordsFailed: 0, recordsLate: 0, recordsInKafka: 0, lag: 0 };
-
-  const isRunning = stats?.isRunning || false;
-  const isPaused = stats?.isPaused || false;
-  const flawAlert = stats?.flawAlert || null;
+  const currentStats: TelemetryPoint = history.length > 0
+    ? history[history.length - 1]
+    : { time: '', timestamp: 0, appLatency: 0, cpu: 0, io: 0, recordsModified: 0, recordsFailed: 0, recordsLate: 0, recordsDropped: 0, recordsInKafka: 0, lag: 0 };
 
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [showFlowModal, setShowFlowModal] = useState(false);
-  const [lastRunStats, setLastRunStats] = useState<any>(null);
-  const [lastRunHistory, setLastRunHistory] = useState<any[]>([]);
-  const prevIsRunning = React.useRef(isRunning);
+  const [lastRunSummary, setLastRunSummary] = useState<RunSummary | null>(null);
+  const [lastRunHistory, setLastRunHistory] = useState<TelemetryPoint[]>([]);
+  const seenSummaryRef = React.useRef<string | null | undefined>(undefined);
 
+  // The server publishes a summary once a run has drained; show it once per run
+  // (but not for a summary that already existed when the page loaded).
+  const summaryId = stats?.lastRunSummary?.runId ?? null;
   useEffect(() => {
-    if (prevIsRunning.current && !isRunning) {
-        if (stats && stats.elapsedSec && stats.elapsedSec > 0) {
-            setLastRunStats(stats);
-            setLastRunHistory(history);
-            setShowSummaryModal(true);
-        }
+    if (!stats) return;
+    if (seenSummaryRef.current === undefined) {
+      seenSummaryRef.current = summaryId;
+      return;
     }
-    prevIsRunning.current = isRunning;
-  }, [isRunning, stats, history]);
+    if (summaryId && summaryId !== seenSummaryRef.current) {
+      seenSummaryRef.current = summaryId;
+      setLastRunSummary(stats.lastRunSummary ?? null);
+      setLastRunHistory(history);
+      setShowSummaryModal(true);
+    }
+  }, [summaryId, stats, history]);
 
-  const handleSaveRun = async (runData: any) => {
-      const res = await fetch('http://localhost:3001/api/simulate/save-run', {
+  const handleSaveRun = async (runData: unknown) => {
+      const res = await fetch(`${API_BASE}/simulate/save-run`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(runData)
@@ -158,9 +166,9 @@ function App() {
             <h1>Data Ingestion & Enrichment Simulation</h1>
             <div className="header-approach">
               <span className="approach-label">Approach:</span>
-              <span className="approach-name">{APPROACHES.find(a => a.id === approach)?.name}</span>
+              <span className="approach-name">{approachName(displayedApproach)}</span>
             </div>
-            {stats?.elapsedSec !== undefined && (
+            {!isIdle && stats?.elapsedSec !== undefined && (
               <div className="header-approach" style={{ marginLeft: '1rem' }}>
                 <span className="approach-label">Elapsed:</span>
                 <span className="approach-name">
@@ -206,9 +214,9 @@ function App() {
           <button 
             className={`icon-btn ${isCleaning ? 'cleaning' : ''}`} 
             onClick={handleClean} 
-            title="Clean Database & Kafka"
-            aria-label="Clean Database and Kafka"
-            disabled={isRunning || isCleaning}
+            title="Tear down pipeline and truncate write tables"
+            aria-label="Clean Database"
+            disabled={!isIdle}
           >
             <Trash2 size={20} className={isCleaning ? 'spin' : ''} />
           </button>
@@ -217,25 +225,25 @@ function App() {
             onClick={handleHealthCheck} 
             title="System Health Check"
             aria-label="System Health Check"
-            disabled={isRunning || isCheckingHealth}
+            disabled={isCheckingHealth || phase === 'starting'}
           >
             <Activity size={20} className={isCheckingHealth ? 'spin' : ''} />
           </button>
           <button 
             className="icon-btn" 
             onClick={handleCleanCdc} 
-            title="Clear CDC Tables"
+            title="Disable CDC on all simulator tables (drops change tables)"
             aria-label="Clear CDC Tables"
-            disabled={isRunning}
+            disabled={!isIdle}
           >
             <Eraser size={20} />
           </button>
           <button 
             className="icon-btn" 
             onClick={handleCleanKafka} 
-            title="Clear Kafka Topics"
+            title="Purge simulator Kafka topics"
             aria-label="Clear Kafka Topics"
-            disabled={isRunning}
+            disabled={!isIdle}
           >
             <Wind size={20} />
           </button>
@@ -244,7 +252,8 @@ function App() {
               display: 'inline-block', width: 8, height: 8, borderRadius: '50%', 
               backgroundColor: isConnected ? '#10b981' : '#ef4444', marginRight: 8 
             }}></span>
-            {isRunning ? (isPaused ? <span className="paused-indicator">PAUSED</span> : <span className="live-indicator">LIVE</span>) : <span className="paused-indicator">STOPPED</span>}
+            {phase === 'running' ? <span className="live-indicator">LIVE</span>
+              : <span className="paused-indicator">{phase === 'idle' ? 'STOPPED' : phase.toUpperCase()}</span>}
           </div>
         </div>
       </header>
@@ -256,14 +265,16 @@ function App() {
           </div>
           <div className="sidebar-content">
             <ControlPanel 
-              approach={approach} setApproach={setApproach}
+              phase={phase} phaseDetail={stats?.phaseDetail}
+              approach={displayedApproach} setApproach={setApproach}
               rps={rps} setRps={setRps}
               endRps={endRps} setEndRps={setEndRps}
+              rampStepRps={rampStepRps} setRampStepRps={setRampStepRps}
               timeoutMs={timeoutMs} setTimeoutMs={setTimeoutMs}
               isGradual={isGradual} setIsGradual={setIsGradual}
-              isRunning={isRunning} isCleaning={isCleaning} isPaused={isPaused}
+              resetData={resetData} setResetData={setResetData}
               isInsertsOnly={isInsertsOnly} setIsInsertsOnly={setIsInsertsOnly}
-              updateSim={updateSim} handleStartStop={handleStartStop} handlePause={handlePause} handleResume={handleResume}
+              updateLive={updateLive} handleStartStop={handleStartStop} handlePause={handlePause} handleResume={handleResume}
               cardinality={cardinality} setCardinality={setCardinality}
               insertWeight={insertWeight} setInsertWeight={setInsertWeight}
               updateWeight={updateWeight} setUpdateWeight={setUpdateWeight}
@@ -300,17 +311,37 @@ function App() {
           </div>
         </aside>
         <main className="grid-area">
-          {flawAlert && (
+          {stats?.lastError && isIdle && (
             <div className="flaw-alert">
               <AlertTriangle size={24} />
               <div className="flaw-content">
-                <h3>Functional Flaw Detected</h3>
+                <h3>Run could not start</h3>
+                <p>{stats.lastError}</p>
+              </div>
+            </div>
+          )}
+
+          {flawAlert && !isIdle && (
+            <div className="flaw-alert">
+              <AlertTriangle size={24} />
+              <div className="flaw-content">
+                <h3>Pipeline Alert</h3>
                 <p>{flawAlert}</p>
               </div>
             </div>
           )}
 
-          {approach === 3 && (
+          {(phase === 'provisioning' || phase === 'draining') && (
+            <div className="flaw-alert info">
+              <AlertTriangle size={24} />
+              <div className="flaw-content">
+                <h3>{phase === 'provisioning' ? 'Provisioning approach environment' : 'Draining pipeline'}</h3>
+                <p>{stats?.phaseDetail}</p>
+              </div>
+            </div>
+          )}
+
+          {displayedApproach === 3 && (
             <div className="flaw-alert info">
               <AlertTriangle size={24} />
               <div className="flaw-content">
@@ -320,12 +351,12 @@ function App() {
             </div>
           )}
 
-          {approach === 5 && (
+          {displayedApproach === 5 && (
             <div className="flaw-alert info">
               <AlertTriangle size={24} />
               <div className="flaw-content">
                 <h3>CDC Push + Consumer Enrichment Mode</h3>
-                <p>{numSubscribers} subscriber workers will consume Kafka events and perform non-blocking <span title="(billing_record → invoice_batch → subscriber_plan → subscriber_usage → rate_schedule)" style={{textDecoration: 'underline dotted', cursor: 'help'}}>multi-table JOINs</span> with NOLOCK hints.</p>
+                <p>{stats?.subscriberStats?.numSubscribers ?? numSubscribers} subscribers consume Kafka events and perform non-blocking <span title="(invoice_batch → subscriber_plan → billing_record / subscriber_usage → rate_schedule)" style={{textDecoration: 'underline dotted', cursor: 'help'}}>multi-table JOINs</span> with NOLOCK hints.</p>
               </div>
             </div>
           )}
@@ -338,6 +369,10 @@ function App() {
                   selectedChartMetrics={selectedChartMetrics}
                   toggleChartMetric={toggleChartMetric}
                   subscriberStats={stats?.subscriberStats}
+                  approach={displayedApproach}
+                  pipelineLatency={stats?.pipelineLatency}
+                  enrichmentMisses={stats?.enrichmentMisses}
+                  smtLookupAvgMs={stats?.smtLookupAvgMs}
                 />
               </div>
             )}
@@ -371,7 +406,7 @@ function App() {
         <div className="logs-modal-overlay" onClick={() => setShowLogsModal(false)}>
           <div className="logs-modal-content" onClick={e => e.stopPropagation()}>
             <SystemLogs 
-              logs={[...(stats?.logs || []), ...localLogs].sort((a, b) => b.timestamp - a.timestamp)} 
+              logs={[...serverLogs, ...localLogs].sort((a, b) => b.timestamp - a.timestamp)} 
               clearLogs={() => {
                 setLocalLogs([]);
                 clearLogs();
@@ -383,16 +418,17 @@ function App() {
       
       {showFlowModal && (
         <DataFlowModal 
-          approach={approach}
+          approach={displayedApproach}
+          trackedTopic={stats?.trackedTopic}
           currentStats={currentStats}
           subscriberStats={stats?.subscriberStats}
           onClose={() => setShowFlowModal(false)}
         />
       )}
 
-      {showSummaryModal && lastRunStats && (
+      {showSummaryModal && lastRunSummary && (
         <RunSummaryModal 
-          stats={lastRunStats} 
+          summary={lastRunSummary} 
           history={lastRunHistory} 
           onClose={() => setShowSummaryModal(false)} 
           onSave={handleSaveRun}

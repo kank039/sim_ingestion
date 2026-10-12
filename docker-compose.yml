@@ -1,18 +1,16 @@
-version: '3.8'
-
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: sqlserver
     environment:
       - ACCEPT_EULA=Y
-      - MSSQL_SA_PASSWORD=Password123!
+      - MSSQL_SA_PASSWORD=${DB_PASS:-Password123!}
       - MSSQL_PID=Developer
       - MSSQL_AGENT_ENABLED=true
     ports:
       - "1433:1433"
     healthcheck:
-      test: ["CMD", "/opt/mssql-tools18/bin/sqlcmd", "-U", "sa", "-P", "Password123!", "-Q", "SELECT 1", "-No"]
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -No"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -56,8 +54,11 @@ services:
       timeout: 5s
       retries: 5
 
+  # Debezium Connect + the Approach 4 JDBC SMT (built from ./debezium).
+  # Connectors are created and deleted per run by the simulator; none run between runs.
   debezium:
-    image: quay.io/debezium/connect:2.7.0.Final
+    build: ./debezium
+    image: sim-debezium:2.7.0
     container_name: debezium
     depends_on:
       kafka:
@@ -85,8 +86,11 @@ services:
       timeout: 5s
       retries: 10
 
+  # Flink + Kafka SQL connector + the Approach 3 job (built from ./flink).
+  # The job is submitted only for Approach 3 runs and cancelled when they end.
   jobmanager:
-    image: flink:1.18.1-scala_2.12
+    build: ./flink
+    image: sim-flink:1.18.1
     container_name: flink-jobmanager
     ports:
       - "8081:8081"
@@ -104,7 +108,8 @@ services:
       - sim_network
 
   taskmanager:
-    image: flink:1.18.1-scala_2.12
+    build: ./flink
+    image: sim-flink:1.18.1
     container_name: flink-taskmanager
     depends_on:
       - jobmanager
@@ -127,32 +132,43 @@ services:
     container_name: simulator
     environment:
       - DB_HOST=sqlserver
+      - DB_PASS=${DB_PASS:-Password123!}
       - KAFKA_BROKERS=kafka:29092
+      - DEBEZIUM_URL=http://debezium:8083
+      - FLINK_URL=http://jobmanager:8081
+      - RESULTS_DIR=/results
     ports:
       - "3001:3001"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./docs/results:/results
     networks:
       - sim_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 30
     depends_on:
       sqlserver:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      debezium:
+        condition: service_healthy
+      jobmanager:
+        condition: service_started
     deploy:
       resources:
         limits:
           cpus: '4.0'
           memory: 2048M
+    # Optional: run the simulator on the host with `npm run dev` instead.
+    profiles: ["app"]
 
   kafka-ui:
     container_name: kafka-ui
-    image: provectuslabs/kafka-ui:latest
+    image: provectuslabs/kafka-ui:v0.7.2
     ports:
       - "8080:8080"
     environment:

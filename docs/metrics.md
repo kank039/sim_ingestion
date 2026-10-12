@@ -4,8 +4,8 @@ This document outlines the various metrics tracked during the simulation, displa
 
 ## 1. Latency & Performance Metrics
 
-- **Application Latency (`appLatency`)**
-  - **What it is**: The average round-trip time (in milliseconds) for the simulator application to successfully execute a database operation (Insert, Update, or Delete).
+- **DB Latency (`appLatency`)**
+  - **What it is**: The average time (in milliseconds) the database takes to execute one write operation (Insert, Update, or Delete), over the last second.
   - **Importance**: Demonstrates the direct impact of an architectural approach on the primary database write path. For example, Database Triggers (Approach 1) typically increase this latency significantly compared to the Transactional Outbox (Approach 2).
 
 - **Queue Latency (`queueLatency`)**
@@ -13,13 +13,13 @@ This document outlines the various metrics tracked during the simulation, displa
   - **Importance**: High queue latency indicates that the database connection pool is exhausted or the system is saturated and cannot process requests as fast as the target RPS (Requests Per Second).
 
 - **P95 / P99 Latency (`p95`, `p99`)**
-  - **What it is**: The 95th and 99th percentile latencies for database operations.
+  - **What it is**: The 95th and 99th percentile latencies for database operations, computed from histograms merged across all writer threads.
   - **Importance**: Crucial for understanding "tail latency." While average latency might look fine, high P99 latency indicates that a small percentage of users are experiencing severe delays, often pointing to garbage collection pauses, lock contention in SQL Server, or network hiccups.
 
 ## 2. Throughput & Reliability Metrics
 
-- **Records Modified (`recordsModified`)**
-  - **What it is**: The cumulative number of successful database mutations performed during the current run.
+- **Committed On Time (`recordsModified`)**
+  - **What it is**: The cumulative number of operations that committed within the SLA timeout during the current run (`recordsCommitted` adds the late ones).
   - **Importance**: Represents the actual throughput achieved by the system.
 
 - **Records Failed (`recordsFailed`)**
@@ -27,21 +27,28 @@ This document outlines the various metrics tracked during the simulation, displa
   - **Importance**: A high failure count indicates the system has hit a hard bottleneck or database issues.
 
 - **Records Late (`recordsLate`)**
-  - **What it is**: The number of operations that timed out (exceeded `timeoutMs`).
+  - **What it is**: The number of operations that committed but took longer than `timeoutMs` (queue wait + DB time).
   - **Importance**: A high late count indicates processing delays and excessive wait times in the queue.
 
+- **Records Dropped (`recordsDropped`)**
+  - **What it is**: Operations the load generator shed without touching the database (queue full, or queued longer than `timeoutMs`).
+  - **Importance**: The generator could not push the target rate through; these never produce events.
+
 - **Success Rate (`successRate`)**
-  - **What it is**: The percentage of successful requests out of the total attempted requests.
+  - **What it is**: Committed operations (on time or late) as a percentage of all attempted operations (including failed and dropped). `slaRate` counts only on-time commits.
   - **Importance**: A direct indicator of system stability under the configured RPS load.
 
 ## 3. Data Pipeline & CDC Metrics
 
-- **Records In Kafka (`recordsInKafka`)**
-  - **What it is**: The total number of events successfully captured by Debezium and committed to the Kafka topic.
+- **Events Delivered (`recordsInKafka`)**
+  - **What it is**: The change events of the current run delivered on the approach's output topic (outbox / shadow / billing CDC topic, or the Flink output for Approach 3), tombstones excluded.
   - **Importance**: Used to verify that events are actually flowing through the streaming infrastructure.
 
-- **Capture Lag (`lag`)**
-  - **What it is**: The numerical difference between `Records Modified` (in the database) and `Records in Kafka`. 
+- **Pipeline Lag (`lag`)**
+  - **What it is**: Committed operations whose change event has not reached the output topic yet (`recordsCommitted - recordsInKafka`).
+
+- **Commit → Topic Latency (`pipelineLatency`)**
+  - **What it is**: Time from the source transaction's commit to the event being available on the output topic (avg/p50/p95/p99, 5s rolling).
   - **Importance**: Arguably the most critical metric for evaluating CDC performance. If lag continually increases, it means the CDC connector (Debezium) or the Kafka cluster cannot keep up with the database's write throughput, leading to stale downstream data.
 
 ## 4. Consumer / Enrichment Metrics
@@ -52,7 +59,7 @@ This document outlines the various metrics tracked during the simulation, displa
   - **Applicability**: Applicable ONLY to **Approach 5** (CDC Push + Consumer Enrichment).
 
 - **Consumer End-to-End Latency (`consumerE2eLatency` / `avgE2eLatency`)**
-  - **What it is**: The total time elapsed from when an event was originally captured/published to when it finished being enriched by the consumer worker.
+  - **What it is**: The time from the source transaction's commit (Debezium `source.ts_ms`) to the moment the consumer finished enriching the event.
   - **Importance**: The ultimate measure of freshness for downstream systems. Tells you exactly how long it takes for a mutation to become fully enriched and actionable.
   - **Applicability**: Applicable ONLY to **Approach 5** (CDC Push + Consumer Enrichment).
 

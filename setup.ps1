@@ -1,22 +1,12 @@
 $ErrorActionPreference = 'Stop'
 
-Write-Host "Starting Docker containers..."
-docker-compose up -d
+Write-Host "Building and starting infrastructure (SQL Server, Kafka, Debezium + SMT, Flink)..."
+docker compose up -d --build
 
-Write-Host "Waiting for database and kafka to be ready..."
-.\run_init.ps1
+Write-Host "Installing Node dependencies..."
+npm run install:all
 
-Write-Host "Registering Debezium connectors..."
-Start-Sleep -Seconds 10
-.\register_connectors.ps1
-
-Write-Host "Installing dependencies..."
-npm install
-Push-Location simulator
-npm ci
-Pop-Location
-Push-Location frontend
-npm install
-Pop-Location
-
-Write-Host "Setup complete. You can now run 'npm run dev' from the root directory."
+Write-Host ""
+Write-Host "Setup complete. Run 'npm run dev' from the repo root."
+Write-Host "The simulator creates the database on first start and provisions the pipeline for each run;"
+Write-Host "no manual SQL scripts or connector registration are needed."

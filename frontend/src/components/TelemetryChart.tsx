@@ -72,8 +72,10 @@ const TelemetryChart: React.FC<TelemetryChartProps> = ({ history, chartSpeed, se
             <YAxis stroke="#888" />
             <Tooltip content={<CustomTooltip />} />
             <Legend />
-            {(!selectedChartMetrics || selectedChartMetrics['appLatency']) && <Line type="monotone" dataKey="appLatency" name="App Latency (ms)" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />}
+            {(!selectedChartMetrics || selectedChartMetrics['appLatency']) && <Line type="monotone" dataKey="appLatency" name="DB Latency (ms)" stroke="#3b82f6" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['actualRps'] && <Line type="monotone" dataKey="actualRps" name="Actual RPS" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />}
+            {selectedChartMetrics && selectedChartMetrics['actualRps'] && <Line type="stepAfter" dataKey="targetRps" name="Target RPS" stroke="#6b7280" strokeDasharray="4 4" dot={false} isAnimationActive={false} />}
+            {selectedChartMetrics && selectedChartMetrics['pipelineLatency'] && <Line type="monotone" dataKey="pipelineLatency" name="Commit → Topic (ms)" stroke="#f472b6" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['queueLatency'] && <Line type="monotone" dataKey="queueLatency" name="Queue Latency (ms)" stroke="#f97316" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {(!selectedChartMetrics || selectedChartMetrics['cpu']) && <Line type="monotone" dataKey="cpu" name="CPU (%)" stroke="#ef4444" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {(!selectedChartMetrics || selectedChartMetrics['io']) && <Line type="monotone" dataKey="io" name="I/O (MB/s)" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />}
@@ -84,6 +86,8 @@ const TelemetryChart: React.FC<TelemetryChartProps> = ({ history, chartSpeed, se
             {selectedChartMetrics && selectedChartMetrics['lag'] && <Line type="monotone" dataKey="lag" name="Pipeline Lag" stroke="#f59e0b" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['recordsFailed'] && <Line type="monotone" dataKey="recordsFailed" name="Failed Records" stroke="#dc2626" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['recordsLate'] && <Line type="monotone" dataKey="recordsLate" name="Late Records" stroke="#fbbf24" strokeWidth={2} dot={false} isAnimationActive={false} />}
+            {selectedChartMetrics && selectedChartMetrics['recordsDropped'] && <Line type="monotone" dataKey="recordsDropped" name="Dropped" stroke="#9ca3af" strokeWidth={2} dot={false} isAnimationActive={false} />}
+            {selectedChartMetrics && selectedChartMetrics['consumerLag'] && <Line type="monotone" dataKey="consumerLag" name="Consumer Lag" stroke="#c084fc" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['slaRate'] && <Line type="monotone" dataKey="slaRate" name="SLA (%)" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['successRate'] && <Line type="monotone" dataKey="successRate" name="Success (%)" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />}
             {selectedChartMetrics && selectedChartMetrics['consumerE2eLatency'] && <Line type="monotone" dataKey="consumerE2eLatency" name="Consumer E2E Latency (ms)" stroke="#f472b6" strokeWidth={2} dot={false} isAnimationActive={false} />}

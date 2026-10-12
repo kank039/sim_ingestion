@@ -1,296 +1,211 @@
-import { parentPort } from 'worker_threads';
-import { connectDB, getPool } from './db';
+/**
+ * Load-generator worker thread. Issues write operations at an exact rate (RatePacer),
+ * limits in-flight operations, and reports per-second counters plus latency histograms.
+ */
+import { parentPort, workerData } from 'worker_threads';
 import sql from 'mssql';
+import { openPool } from './db';
+import { APPROACHES, isApproachId, type ApproachProfile } from './approaches';
+import { LatencyHistogram } from './histogram';
+import { RatePacer } from './pacer';
+import { buildWriteBatch, executeWrite, pickOp, type RequestedOp } from './writer';
 
-let isRunning = false;
-let isPaused = false;
-let currentApproach = 1;
-let currentRps = 10;
+const concurrency: number = workerData?.concurrency ?? 50;
+const queueLimit: number = workerData?.queueLimit ?? 5000;
+
+let pool: sql.ConnectionPool | null = null;
+let profile: ApproachProfile = APPROACHES[1];
+let batchSql = buildWriteBatch(profile);
 let timeoutMs = 3000;
-let isInsertsOnly = false;
+let insertsOnly = true;
 let cardinality = 100;
-let insertWeight = 0.5;
-let updateWeight = 0.3;
-let deleteWeight = 0.2;
+let weights = { insert: 0.5, update: 0.3, delete: 0.2 };
 
-const MAX_LATENCY_HISTORY = 500;
-let dbLatencyHistory: number[] = new Array(MAX_LATENCY_HISTORY);
-let queueLatencyHistory: number[] = new Array(MAX_LATENCY_HISTORY);
-let latencyIndex = 0;
-let latencyCount = 0;
+let running = false;
+let paused = false;
+const pacer = new RatePacer();
+let ticker: NodeJS.Timeout | null = null;
 
-let recordsModified = 0;
-let recordsFailed = 0;
-let recordsLate = 0;
+// Per-window counters (reset after each stats message).
+let issued = 0, onTime = 0, late = 0, failed = 0, dropped = 0, partialWrites = 0;
+let ops = { c: 0, u: 0, d: 0 };
+const dbHist = new LatencyHistogram();
+const queueHist = new LatencyHistogram();
+const errors = new Map<string, number>();
 
-// Connect to DB and notify parent
-connectDB().then(() => {
-    parentPort?.postMessage({ type: 'ready' });
-}).catch((err) => {
-    console.error("Worker DB connection failed:", err);
-});
+// Concurrency limiter.
+let active = 0;
+const waiting: (() => void)[] = [];
+let outstanding = 0; // issued but not yet settled (queued + active)
 
-parentPort?.on('message', (msg) => {
-    if (msg.type === 'start') {
-        currentApproach = msg.approach;
-        currentRps = msg.rps; // RPS assigned to this specific worker
-        timeoutMs = msg.timeoutMs || 3000;
-        isInsertsOnly = !!msg.insertsOnly;
-        if (msg.cardinality) cardinality = msg.cardinality;
-        if (msg.insertWeight !== undefined) insertWeight = msg.insertWeight;
-        if (msg.updateWeight !== undefined) updateWeight = msg.updateWeight;
-        if (msg.deleteWeight !== undefined) deleteWeight = msg.deleteWeight;
-        
-        if (!isRunning) {
-            isRunning = true;
-            isPaused = false;
-            simulationLoop();
-        }
-    } else if (msg.type === 'stop') {
-        isRunning = false;
-    } else if (msg.type === 'pause') {
-        isPaused = true;
-    } else if (msg.type === 'resume') {
-        isPaused = false;
-    } else if (msg.type === 'reconnect') {
-        connectDB().catch(console.error);
-    }
-});
-
-function calculatePercentiles(latencies: number[], count: number) {
-    if (count === 0) return { avg: 0, p50: 0, p95: 0, p99: 0 };
-    const validLatencies = latencies.slice(0, count).sort((a, b) => a - b);
-    const sum = validLatencies.reduce((a, b) => a + b, 0);
-    return {
-        avg: sum / count,
-        p50: validLatencies[Math.floor(count * 0.50)],
-        p95: validLatencies[Math.floor(count * 0.95)],
-        p99: validLatencies[Math.floor(count * 0.99)]
-    };
-}
-
-// Periodically send stats to the main thread
-setInterval(() => {
-    const dbStats = calculatePercentiles(dbLatencyHistory, latencyCount);
-    const queueStats = calculatePercentiles(queueLatencyHistory, latencyCount);
-    
-    parentPort?.postMessage({ 
-        type: 'stats', 
-        avgLatency: dbStats.avg,
-        p50: dbStats.p50,
-        p95: dbStats.p95,
-        p99: dbStats.p99,
-        queueAvg: queueStats.avg,
-        count: latencyCount,
-        modified: recordsModified,
-        failed: recordsFailed,
-        late: recordsLate
-    });
-    // Reset for next batch
-    latencyIndex = 0;
-    latencyCount = 0;
-    recordsModified = 0;
-    recordsFailed = 0;
-    recordsLate = 0;
-}, 1000);
-
-function createLimiter(concurrency: number, maxQueue: number = 5000) {
-    let active = 0;
-    const queue: (() => void)[] = [];
-    return async <T>(fn: () => Promise<T>): Promise<T> => {
-        if (active >= concurrency) {
-            if (queue.length >= maxQueue) {
-                throw new Error('QUEUE_FULL');
-            }
-            await new Promise<void>(resolve => queue.push(resolve));
-        }
-        active++;
+async function connect() {
+    while (true) {
         try {
-            return await fn();
-        } finally {
-            active--;
-            if (queue.length > 0) {
-                const next = queue.shift();
-                if (next) next();
-            }
+            pool = await openPool(concurrency + 2, { label: 'Writer', retries: 5 });
+            parentPort?.postMessage({ type: 'ready' });
+            return;
+        } catch (e) {
+            parentPort?.postMessage({ type: 'error', message: String((e as Error).message || e) });
         }
-    };
-}
-
-const limit = createLimiter(50, 5000);
-
-async function simulationLoop() {
-    while (isRunning) {
-        if (isPaused) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-        }
-        
-        // Divide RPS into 10 chunks per second
-        const batchSize = Math.max(1, Math.floor(currentRps / 10)); 
-        
-        for (let i = 0; i < batchSize; i++) {
-            const startWait = performance.now();
-            limit(async () => {
-                const waitTime = performance.now() - startWait;
-                if (waitTime > timeoutMs) {
-                    recordsLate++;
-                    return;
-                }
-                try {
-                    const execPromise = executeOperation(waitTime);
-                    const timeoutPromise = new Promise((_, reject) => 
-                        setTimeout(() => reject(new Error('TIMEOUT')), Math.max(0, timeoutMs - waitTime))
-                    );
-                    await Promise.race([execPromise, timeoutPromise]);
-                    recordsModified++;
-                } catch (e: any) {
-                    if (e.message === 'TIMEOUT') {
-                        recordsLate++;
-                    } else {
-                        recordsFailed++;
-                        console.error("Op Error:", e);
-                    }
-                }
-            }).catch(e => {
-                if (e.message === 'QUEUE_FULL') {
-                    recordsLate++;
-                } else {
-                    console.error("Limit Error:", e);
-                }
-            });
-        }
-        
-        await new Promise(resolve => setTimeout(resolve, 100)); // Sleep 100ms
     }
 }
 
-async function executeOperation(waitTime: number) {
-    const pool = getPool();
-    if (!pool) return;
-    
+function recordError(e: unknown) {
+    const msg = String((e as Error)?.message || e).slice(0, 200);
+    errors.set(msg, (errors.get(msg) || 0) + 1);
+}
+
+async function runOne(scheduledAt: number) {
+    outstanding++;
+    try {
+        if (active < concurrency) {
+            active++;
+        } else {
+            if (waiting.length >= queueLimit) {
+                dropped++;
+                return;
+            }
+            // The releasing operation hands its slot straight to us (active is not decremented).
+            await new Promise<void>(resolve => waiting.push(resolve));
+        }
+        try {
+            const waitMs = performance.now() - scheduledAt;
+            if (waitMs > timeoutMs) {
+                // Expired while queued: shed it without touching the database.
+                dropped++;
+                return;
+            }
+            await execute(waitMs);
+        } finally {
+            releaseSlot();
+        }
+    } finally {
+        outstanding--;
+    }
+}
+
+function releaseSlot() {
+    const next = waiting.shift();
+    if (next) next();
+    else active--;
+}
+
+async function execute(waitMs: number) {
+    if (!pool) {
+        failed++;
+        recordError('No database connection');
+        return;
+    }
+    const requestedOp: RequestedOp = pickOp(insertsOnly, weights);
     const batchId = Math.floor(Math.random() * cardinality) + 1;
     const amount = (Math.random() * 1000).toFixed(2);
-    const payload = JSON.stringify({ batchId, amount, invoiceNumber: `INV-${1000 + batchId}` });
-    
     const start = performance.now();
-    
-    let operationType = 'insert';
-    if (!isInsertsOnly) {
-        const rand = Math.random();
-        if (rand < deleteWeight) {
-            operationType = 'delete';
-        } else if (rand < deleteWeight + updateWeight) {
-            operationType = 'update';
-        }
-    }
-
     try {
-        if (currentApproach === 2) {
-            // Transactional Outbox (Fixed: Single batch with explicit BEGIN TRAN / COMMIT TRAN inside SQL Server)
-            const request = pool.request();
-            request.input('batchId', sql.Int, batchId);
-            request.input('amount', sql.Decimal(10, 2), amount);
-            request.input('payload', sql.NVarChar, payload);
-
-            let sqlQuery = '';
-            
-            if (operationType === 'delete') {
-                sqlQuery = `
-                    BEGIN TRAN;
-                    DELETE TOP (1) FROM billing_record WHERE batch_id = @batchId;
-                    IF @@ROWCOUNT = 0
-                    BEGIN
-                        INSERT INTO billing_record (batch_id, amount) VALUES (@batchId, @amount);
-                        INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);
-                    END
-                    ELSE
-                    BEGIN
-                        INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);
-                    END
-                    COMMIT TRAN;
-                `;
-            } else if (operationType === 'update') {
-                sqlQuery = `
-                    BEGIN TRAN;
-                    UPDATE TOP (1) billing_record SET amount = @amount WHERE batch_id = @batchId;
-                    IF @@ROWCOUNT = 0
-                    BEGIN
-                        INSERT INTO billing_record (batch_id, amount) VALUES (@batchId, @amount);
-                        INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);
-                    END
-                    ELSE
-                    BEGIN
-                        INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);
-                    END
-                    COMMIT TRAN;
-                `;
-            } else {
-                sqlQuery = `
-                    BEGIN TRAN;
-                    INSERT INTO billing_record (batch_id, amount) VALUES (@batchId, @amount);
-                    INSERT INTO outbox_events (aggregate_id, payload) VALUES (@batchId, @payload);
-                    COMMIT TRAN;
-                `;
-            }
-
-            await request.query(sqlQuery);
-        } else {
-            // Triggers / Flink / SMT Approaches
-            const request = pool.request();
-            request.input('batchId', sql.Int, batchId);
-            request.input('amount', sql.Decimal(10, 2), amount);
-            
-            let didWrite = false;
-            
-            if (operationType === 'delete') {
-                const res = await request.query(`DELETE TOP (1) FROM billing_record WHERE batch_id = @batchId`);
-                if (res.rowsAffected[0] === 0) {
-                    await request.query(`INSERT INTO billing_record (batch_id, amount) VALUES (@batchId, @amount)`);
-                }
-                didWrite = true;
-            } else if (operationType === 'update') {
-                const res = await request.query(`UPDATE TOP (1) billing_record SET amount = @amount WHERE batch_id = @batchId`);
-                if (res.rowsAffected[0] === 0) {
-                    await request.query(`INSERT INTO billing_record (batch_id, amount) VALUES (@batchId, @amount)`);
-                }
-                didWrite = true;
-            } else {
-                await request.query(`INSERT INTO billing_record (batch_id, amount) VALUES (@batchId, @amount)`);
-                didWrite = true;
-            }
-            
-            if (didWrite && currentApproach === 3) {
-                // Flink: Simulate dual-write pattern
-                const req2 = pool.request();
-                req2.input('batchId', sql.Int, batchId);
-                req2.input('payload', sql.NVarChar, payload);
-                await req2.query(`INSERT INTO enrichment_requests (batch_id, payload) VALUES (@batchId, @payload)`);
-            }
-            
-            if (didWrite && currentApproach === 4) {
-                // SMT: Simulate JDBC lookup AFTER write, with artificial latency
-                await new Promise(resolve => setTimeout(resolve, 5)); // Artificial latency
-                const req3 = pool.request();
-                req3.input('batchId', sql.Int, batchId);
-                await req3.query(`SELECT invoice_number FROM invoice_batch WHERE id = @batchId`);
-            }
-            
-            // Approach 5: CDC Push + Consumer Enrichment
-            // Write-side is identical to default (just billing_record writes).
-            // Debezium CDC captures changes and pushes to Kafka.
-            // Consumer workers (consumer-worker.ts) handle the enrichment via
-            // non-blocking multi-table JOINs on the read side.
-        }
+        const result = await executeWrite(pool, profile, batchSql, { batchId, amount, requestedOp });
+        const execMs = performance.now() - start;
+        dbHist.record(execMs);
+        queueHist.record(waitMs);
+        ops[result.op]++;
+        // The operation committed either way; "late" means it missed the SLA.
+        if (waitMs + execMs > timeoutMs) late++; else onTime++;
     } catch (e) {
-        console.error(e);
-        throw e;
+        failed++;
+        if ((e as any)?.partialWrite) partialWrites++;
+        recordError(e);
     }
-
-    const end = performance.now();
-    
-    dbLatencyHistory[latencyIndex] = (end - start);
-    queueLatencyHistory[latencyIndex] = waitTime;
-    latencyIndex = (latencyIndex + 1) % MAX_LATENCY_HISTORY;
-    if (latencyCount < MAX_LATENCY_HISTORY) latencyCount++;
 }
+
+function tick() {
+    if (!running || paused) return;
+    const n = pacer.due(performance.now());
+    for (let i = 0; i < n; i++) {
+        issued++;
+        void runOne(performance.now());
+    }
+}
+
+function flushStats(final = false) {
+    parentPort?.postMessage({
+        type: 'stats',
+        final,
+        issued, onTime, late, failed, dropped, partialWrites,
+        ops,
+        dbHist: dbHist.toJSON(),
+        queueHist: queueHist.toJSON(),
+        errors: [...errors.entries()].map(([message, count]) => ({ message, count })),
+        inFlight: outstanding,
+    });
+    issued = onTime = late = failed = dropped = partialWrites = 0;
+    ops = { c: 0, u: 0, d: 0 };
+    dbHist.reset();
+    queueHist.reset();
+    errors.clear();
+}
+
+setInterval(() => flushStats(), 1000);
+
+async function stop() {
+    running = false;
+    paused = false;
+    if (ticker) clearInterval(ticker);
+    ticker = null;
+    // Let everything already issued settle (bounded by the SLA timeout plus the DB request timeout).
+    const deadline = Date.now() + timeoutMs + 35_000;
+    while (outstanding > 0 && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 25));
+    }
+    flushStats(true);
+    parentPort?.postMessage({ type: 'stopped', abandoned: outstanding });
+}
+
+parentPort?.on('message', async (msg) => {
+    switch (msg.type) {
+        case 'configure': {
+            if (isApproachId(msg.approach)) profile = APPROACHES[msg.approach as 1];
+            batchSql = buildWriteBatch(profile);
+            applyUpdate(msg);
+            if (typeof msg.cardinality === 'number' && msg.cardinality >= 1) cardinality = Math.floor(msg.cardinality);
+            break;
+        }
+        case 'update':
+            applyUpdate(msg);
+            break;
+        case 'start':
+            running = true;
+            paused = false;
+            pacer.setRate(msg.rate, performance.now());
+            if (!ticker) ticker = setInterval(tick, 5);
+            break;
+        case 'rate':
+            pacer.setRate(msg.rate, performance.now());
+            break;
+        case 'pause':
+            paused = true;
+            break;
+        case 'resume':
+            paused = false;
+            pacer.setRate(pacer.getRate(), performance.now()); // don't owe a burst for the paused time
+            break;
+        case 'stop':
+            await stop();
+            break;
+        case 'reconnect': {
+            const old = pool;
+            pool = null;
+            try { await old?.close(); } catch { /* ignore */ }
+            await connect();
+            break;
+        }
+    }
+});
+
+function applyUpdate(msg: any) {
+    if (typeof msg.timeoutMs === 'number' && msg.timeoutMs > 0) timeoutMs = msg.timeoutMs;
+    if (typeof msg.insertsOnly === 'boolean') insertsOnly = msg.insertsOnly;
+    if (msg.weights) {
+        const w = msg.weights;
+        weights = { insert: Number(w.insert) || 0, update: Number(w.update) || 0, delete: Number(w.delete) || 0 };
+    }
+}
+
+void connect();

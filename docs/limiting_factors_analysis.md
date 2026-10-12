@@ -1,5 +1,9 @@
 # Data Ingestion Simulation: Limiting Factors Analysis
 
+> **Outdated numbers.** These results were produced before the metric and isolation fixes (see CHANGELOG):
+> the generator did not hit its target rate, every approach also paid for the Approach 1 trigger and CDC on all
+> tables, and Approaches 3/4 were simulated in the writer. Re-run `scripts/auto_rampup_simulation.ps1` for valid figures.
+
 Based on the automated ramp-up simulation results, this document provides a detailed breakdown of the exact limiting factors that caused each data ingestion approach to fail. 
 
 ## Approach 1: Database Triggers (DBA Outbox)

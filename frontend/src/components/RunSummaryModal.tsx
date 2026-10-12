@@ -1,74 +1,71 @@
 import React, { useState } from 'react';
-import { X, Save, Activity } from 'lucide-react';
-import { APPROACHES } from '../constants';
+import { X, Save, Activity, Check } from 'lucide-react';
+import { API_BASE } from '../constants';
+import type { RunSummary, TelemetryPoint, VerifyResult } from '../types';
 
 interface RunSummaryModalProps {
-  stats: any;
-  history: any[];
+  summary: RunSummary;
+  history: TelemetryPoint[];
   onClose: () => void;
-  onSave: (data: any) => Promise<void>;
+  onSave: (data: unknown) => Promise<void>;
 }
 
-export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history, onClose, onSave }) => {
+const Stat: React.FC<{ label: string; value: React.ReactNode; color?: string }> = ({ label, value, color }) => (
+  <div>
+    <div style={{ color: '#aaa', fontSize: '0.85rem' }}>{label}</div>
+    <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color }}>{value}</div>
+  </div>
+);
+
+const good = 'var(--accent-green)';
+const bad = 'var(--accent-red)';
+
+export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ summary, history, onClose, onSave }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [verifyOrdering, setVerifyOrdering] = useState(false);
-  const [verifyDuplicates, setVerifyDuplicates] = useState(false);
-  const [verificationResult, setVerificationResult] = useState<any>(null);
+  const [verification, setVerification] = useState<VerifyResult | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
 
-  const totalRecords = (stats?.recordsModified || 0) + (stats?.recordsFailed || 0) + (stats?.recordsLate || 0);
-  const slaRate = totalRecords > 0 
-    ? ((stats.recordsModified / totalRecords) * 100).toFixed(2) 
-    : '0.00';
-  const successRate = totalRecords > 0 
-    ? (((stats.recordsModified + stats.recordsLate) / totalRecords) * 100).toFixed(2) 
-    : '0.00';
+  const s = summary;
+  const totalAttempted = s.recordsCommitted + s.recordsFailed + s.recordsDropped;
 
   const handleSave = async () => {
     setIsSaving(true);
-    const runData = {
-      runId: stats?.runId || Date.now().toString(),
-      timestamp: new Date().toISOString(),
-      approach: stats?.approach,
-      approachName: APPROACHES.find(a => a.id === stats?.approach)?.name,
-      rps: stats?.rps,
-      elapsedSec: stats?.elapsedSec,
-      recordsModified: stats?.recordsModified,
-      recordsFailed: stats?.recordsFailed,
-      recordsLate: stats?.recordsLate,
-      slaRate,
-      successRate,
-      p95: stats?.p95,
-      p99: stats?.p99,
-      queueLatency: stats?.queueLatency,
-      appLatency: stats?.appLatency,
-      history
-    };
     try {
-      await onSave(runData);
+      await onSave({
+        runId: s.runId,
+        timestamp: s.finishedAt,
+        approach: s.approach,
+        approachName: s.approachName,
+        summary: s,
+        verification,
+        history,
+      });
       setSaved(true);
     } catch (e) {
       console.error(e);
-      alert('Failed to save run');
+      alert(`Failed to save run: ${String(e)}`);
     }
     setIsSaving(false);
   };
 
   const handleVerify = async () => {
     setIsVerifying(true);
-    setVerificationResult(null);
+    setVerification(null);
+    setVerifyError(null);
     try {
-      const res = await fetch('http://localhost:3001/api/simulate/verify', { method: 'POST' });
-      if (!res.ok) throw new Error(await res.text());
+      const res = await fetch(`${API_BASE}/simulate/verify`, { method: 'POST' });
       const data = await res.json();
-      setVerificationResult(data);
+      if (!res.ok) throw new Error(data.error || 'Verification failed');
+      setVerification(data);
     } catch (e) {
-      console.error(e);
-      alert('Verification failed');
+      setVerifyError(String(e));
     }
     setIsVerifying(false);
   };
+
+  const fmtDur = (sec: number) => `${Math.floor(sec / 60)}m ${sec % 60}s`;
 
   return (
     <div style={{
@@ -76,115 +73,114 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
       backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 1000,
       display: 'flex', justifyContent: 'center', alignItems: 'center'
     }}>
-      <div className="glass-panel" style={{ width: '600px', maxWidth: '90%', padding: '2rem', position: 'relative' }}>
-        <button 
+      <div className="glass-panel" style={{ width: '720px', maxWidth: '92%', maxHeight: '92vh', overflowY: 'auto', padding: '2rem', position: 'relative' }}>
+        <button
           onClick={onClose}
           style={{ position: 'absolute', top: '1rem', right: '1rem', background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}
         >
           <X size={24} />
         </button>
-        
+
         <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: 0 }}>
-          <Activity size={24} color="var(--accent-blue)" /> Simulation Finished
+          <Activity size={24} color="var(--accent-blue)" /> Run Finished
         </h2>
-        
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', margin: '2rem 0' }}>
-          <div>
-            <div style={{ color: '#aaa', fontSize: '0.85rem' }}>Approach</div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{APPROACHES.find(a => a.id === stats?.approach)?.name}</div>
-          </div>
-          <div>
-            <div style={{ color: '#aaa', fontSize: '0.85rem' }}>Duration</div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{Math.floor((stats?.elapsedSec || 0) / 60)}m {(stats?.elapsedSec || 0) % 60}s</div>
-          </div>
-          <div>
-            <div style={{ color: '#aaa', fontSize: '0.85rem' }}>Total Records</div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{totalRecords.toLocaleString()}</div>
-          </div>
-          <div>
-            <div style={{ color: '#aaa', fontSize: '0.85rem' }}>SLA %</div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: parseFloat(slaRate) > 99 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-              {slaRate}%
-            </div>
-          </div>
-          <div>
-            <div style={{ color: '#aaa', fontSize: '0.85rem' }}>Success %</div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: parseFloat(successRate) > 99 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-              {successRate}%
-            </div>
-          </div>
-          <div></div>
-          <div>
-            <div style={{ color: '#aaa', fontSize: '0.85rem' }}>p95 Latency</div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{stats?.p95 || 0} ms</div>
-          </div>
-          <div>
-            <div style={{ color: '#aaa', fontSize: '0.85rem' }}>p99 Latency</div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{stats?.p99 || 0} ms</div>
-          </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', margin: '1.5rem 0' }}>
+          <Stat label="Approach" value={s.approachName} />
+          <Stat label="Duration (excl. pauses)" value={fmtDur(s.elapsedSec)} />
+          <Stat label="Avg committed RPS" value={`${s.avgCommittedRps} (target ${s.finalTargetRps})`} />
+
+          <Stat label="Attempted" value={totalAttempted.toLocaleString()} />
+          <Stat label="Committed (on time / late)" value={`${s.recordsModified.toLocaleString()} / ${s.recordsLate.toLocaleString()}`} />
+          <Stat label="Failed / Dropped" value={`${s.recordsFailed} / ${s.recordsDropped}`} color={s.recordsFailed + s.recordsDropped > 0 ? bad : undefined} />
+
+          <Stat label="SLA %" value={`${s.slaRate}%`} color={s.slaRate >= 99 ? good : bad} />
+          <Stat label="Success %" value={`${s.successRate}%`} color={s.successRate >= 99 ? good : bad} />
+          <Stat label="Final pipeline lag" value={s.lag.toLocaleString()} color={s.lag === 0 ? good : bad} />
+
+          <Stat label="DB latency p50 / p95 / p99" value={`${s.p50} / ${s.p95} / ${s.p99} ms`} />
+          <Stat label="Commit → topic p50 / p95" value={`${s.pipelineLatency.p50} / ${s.pipelineLatency.p95} ms`} />
+          <Stat label="Events delivered" value={`${s.recordsInKafka.toLocaleString()}`} />
+
+          {s.subscriber && (
+            <>
+              <Stat label="Subscriber enrichments" value={s.subscriber.consumed.toLocaleString()} />
+              <Stat label="Enrichment p95" value={`${Math.round(s.subscriber.enrichment.p95)} ms`} />
+              <Stat label="Commit → enriched p95" value={`${Math.round(s.subscriber.e2e.p95)} ms`} />
+            </>
+          )}
+          {s.approach === 4 && <Stat label="SMT enrichment misses" value={s.enrichmentMisses} color={s.enrichmentMisses ? bad : good} />}
+          {s.approach === 3 && <Stat label="Partial dual writes" value={s.partialWrites} color={s.partialWrites ? bad : good} />}
         </div>
 
+        {s.flawAlert && (
+          <div style={{ marginBottom: '1rem', color: '#fca5a5', fontSize: '0.9rem' }}>Alert during run: {s.flawAlert}</div>
+        )}
+
         <div style={{ margin: '1rem 0', padding: '1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
-          <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem' }}>Verification Checks</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={verifyOrdering} onChange={e => setVerifyOrdering(e.target.checked)} />
-              Verify Message Ordering (Strictly Monotonic)
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={verifyDuplicates} onChange={e => setVerifyDuplicates(e.target.checked)} />
-              Verify Delivery Semantics (Check for Duplicates)
-            </label>
+          <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem' }}>Delivery Verification</h3>
+          <div style={{ fontSize: '0.8rem', color: '#aaa', marginBottom: '0.75rem' }}>
+            Re-reads this run's events on <code>{s.trackedTopic}</code> and checks completeness, duplicate deliveries
+            and per-key / per-entity ordering.
           </div>
-          <button 
+          <button
             onClick={handleVerify}
-            disabled={isVerifying || (!verifyOrdering && !verifyDuplicates)}
-            style={{ 
-              padding: '0.5rem 1rem', 
-              background: 'var(--accent-blue)', 
-              color: '#fff', border: 'none', borderRadius: '4px', cursor: (isVerifying || (!verifyOrdering && !verifyDuplicates)) ? 'not-allowed' : 'pointer',
-              opacity: (isVerifying || (!verifyOrdering && !verifyDuplicates)) ? 0.5 : 1
+            disabled={isVerifying}
+            style={{
+              padding: '0.5rem 1rem', background: 'var(--accent-blue)', color: '#fff', border: 'none', borderRadius: '4px',
+              cursor: isVerifying ? 'not-allowed' : 'pointer', opacity: isVerifying ? 0.5 : 1
             }}
           >
             {isVerifying ? 'Running Verification...' : 'Run Verification'}
           </button>
 
-          {verificationResult && (
-            <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '4px', fontSize: '0.9rem' }}>
-              <div style={{ marginBottom: '0.5rem' }}><strong>Messages Checked:</strong> {verificationResult.messagesChecked.toLocaleString()}</div>
-              {verifyOrdering && (
-                <div>
-                  <strong>Ordering:</strong>{' '}
-                  <span style={{ color: verificationResult.ordered ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                    {verificationResult.ordered ? 'Strictly Monotonic (Passed)' : 'Out of Order (Failed)'}
-                  </span>
-                </div>
-              )}
-              {verifyDuplicates && (
-                <div style={{ marginTop: '0.25rem' }}>
-                  <strong>Duplicates:</strong>{' '}
-                  <span style={{ color: verificationResult.duplicates === 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                    {verificationResult.duplicates === 0 ? '0 (Exactly-Once Passed)' : `${verificationResult.duplicates} (At-Least-Once / Failed)`}
-                  </span>
-                </div>
-              )}
+          {verifyError && <div style={{ marginTop: '0.75rem', color: bad }}>{verifyError}</div>}
+          {verification && (
+            <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '4px', fontSize: '0.9rem', display: 'grid', gap: '0.3rem' }}>
+              <div><strong>Events checked:</strong> {verification.messagesChecked.toLocaleString()}{!verification.complete && ' (timed out before the end of the topic)'}</div>
+              <div>
+                <strong>Completeness:</strong>{' '}
+                <span style={{ color: verification.missing === 0 ? good : bad }}>
+                  {verification.missing === 0 ? `all ${verification.expected.toLocaleString()} committed changes delivered` : `${verification.missing.toLocaleString()} of ${verification.expected.toLocaleString()} missing`}
+                </span>
+              </div>
+              <div>
+                <strong>Duplicates:</strong>{' '}
+                <span style={{ color: verification.duplicates === 0 ? good : bad }}>
+                  {verification.duplicates === 0 ? '0 (each change delivered once)' : `${verification.duplicates} redelivered changes (at-least-once)`}
+                </span>
+              </div>
+              <div>
+                <strong>Per-key ordering:</strong>{' '}
+                <span style={{ color: verification.keyOrderViolations === 0 ? good : bad }}>
+                  {verification.keyOrderViolations === 0 ? 'preserved' : `${verification.keyOrderViolations} regressions`}
+                </span>
+              </div>
+              <div>
+                <strong>Per-entity ordering:</strong>{' '}
+                <span style={{ color: verification.entitiesSpreadAcrossPartitions === 0 ? good : '#fbbf24' }}>
+                  {verification.entitiesSpreadAcrossPartitions === 0
+                    ? `guaranteed (${verification.entitiesChecked.toLocaleString()} entities, each on one partition)`
+                    : `not guaranteed: ${verification.entitiesSpreadAcrossPartitions.toLocaleString()} of ${verification.entitiesChecked.toLocaleString()} entities have events on several partitions`}
+                </span>
+              </div>
             </div>
           )}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-          <button 
+          <button
             onClick={onClose}
             style={{ padding: '0.5rem 1rem', background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
           >
             Dismiss
           </button>
-          <button 
+          <button
             onClick={handleSave}
             disabled={isSaving || saved}
-            style={{ 
-              padding: '0.5rem 1rem', 
-              background: saved ? 'var(--accent-green)' : 'var(--accent-blue)', 
+            style={{
+              padding: '0.5rem 1rem',
+              background: saved ? 'var(--accent-green)' : 'var(--accent-blue)',
               color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: '0.5rem'
             }}
@@ -196,9 +192,3 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({ stats, history
     </div>
   );
 };
-
-const Check = ({ size }: { size: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="20 6 9 17 4 12"></polyline>
-  </svg>
-);

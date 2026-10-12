@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, Cpu, HardDrive, Database, Activity, AlertTriangle, XCircle, Percent, Users, Zap, GripHorizontal } from 'lucide-react';
-import type { TelemetryPoint, SubscriberStats } from '../types';
+import { Clock, Cpu, HardDrive, Database, Activity, AlertTriangle, XCircle, Percent, Users, Zap, GripHorizontal, Ban, Timer, Search } from 'lucide-react';
+import type { TelemetryPoint, SubscriberStats, LatencySummary } from '../types';
+import { outcomeRates } from '../metrics';
 import {
   DndContext,
   closestCenter,
@@ -20,45 +21,67 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 
 const METRIC_DESCRIPTIONS: Record<string, string> = {
-  actualRps: "What it is: The actual Requests Per Second being processed.\nImportance: Shows real throughput compared to target.",
-  appLatency: "What it is: Average round-trip time for DB operations.\nImportance: Demonstrates direct impact of approach on primary DB write path.",
+  actualRps: "What it is: Operations committed per second (5s rolling), next to the target rate.\nImportance: Shows real throughput compared to target.",
+  appLatency: "What it is: Average DB execution time of a write operation (this second).\nImportance: Demonstrates direct impact of approach on primary DB write path.",
   queueLatency: "What it is: Time operations spend waiting in Node.js queue.\nImportance: High values indicate DB pool exhaustion or system saturation.",
-  percentiles: "What it is: 95th and 99th percentile latencies.\nImportance: Crucial for understanding tail latency and worst-case performance.",
+  percentiles: "What it is: True 95th/99th percentile DB latency across all writer threads (merged histograms).\nImportance: Crucial for understanding tail latency and worst-case performance.",
+  pipelineLatency: "What it is: Time from DB commit (CDC source timestamp) until the event is on the approach's output topic (5s rolling).\nImportance: Freshness of the stream each approach produces.",
+  recordsDropped: "What it is: Operations the load generator shed before reaching the DB (queue full or waited longer than the SLA).\nImportance: The generator could not push the target rate through.",
+  smtLookup: "What it is: JDBC SMT lookup time inside Kafka Connect, and events whose invoice lookup found nothing.\nImportance: Cost and correctness of synchronous enrichment.",
   cpu: "What it is: CPU utilization of Docker containers.\nImportance: Identifies which component is the bottleneck under load.",
   io: "What it is: SQL Server I/O utilization.\nImportance: Helps identify excessive disk buffering.",
   wait_tasks: "What it is: Number of DB wait tasks.\nImportance: Indicates DB lock contention or resource waits.",
   active_locks: "What it is: Number of active database locks.\nImportance: Shows transaction concurrency issues.",
   recordsModified: "What it is: Cumulative number of successful database mutations.\nImportance: Represents actual throughput.",
-  recordsInKafka: "What it is: Total events captured by Debezium and committed to Kafka.\nImportance: Verifies events are flowing through streaming infrastructure.",
-  lag: "What it is: Difference between Records Modified and Records in Kafka.\nImportance: Critical for evaluating CDC performance (stale data).",
+  recordsInKafka: "What it is: Change events of this run delivered on the approach's output topic (tombstones excluded).\nImportance: Verifies events are flowing through streaming infrastructure.",
+  lag: "What it is: Committed operations whose event has not reached the output topic yet.\nImportance: Critical for evaluating CDC performance (stale data).",
   recordsFailed: "What it is: Number of operations that threw an error.\nImportance: High count indicates hard bottleneck.",
-  recordsLate: "What it is: Number of operations that timed out.\nImportance: High count indicates processing delays.",
-  successRate: "What it is: Percentage of requests that were successfully processed.\nImportance: Direct indicator of system stability.",
-  slaRate: "What it is: Percentage of successful requests that met the timeout SLA.\nImportance: Indicator of system performance and compliance.",
+  recordsLate: "What it is: Operations that committed but took longer than the SLA timeout.\nImportance: High count indicates processing delays.",
+  successRate: "What it is: Share of all attempted operations that committed (on time or late).\nImportance: Direct indicator of system stability.",
+  slaRate: "What it is: Share of all attempted operations that committed within the SLA timeout.\nImportance: Indicator of system performance and compliance.",
   numSubscribers: "What it is: Number of active consumer workers.\nImportance: Shows horizontal scaling factor for Approach 5.",
   totalMessagesConsumed: "What it is: Total messages fully processed by consumers.\nImportance: Represents downstream throughput.",
   consumerEnrichmentLatency: "What it is: Time taken to execute multi-table JOINs against DB.\nImportance: Measures cost of doing read-side enrichment.",
   percentilesEnrichment: "What it is: 95th/99th percentile for enrichment latency.\nImportance: Shows worst-case read-side performance.",
-  consumerE2eLatency: "What it is: Total time from capture to enrichment completion.\nImportance: Ultimate measure of freshness for downstream systems.",
+  consumerE2eLatency: "What it is: Time from DB commit to enrichment completed by a subscriber.\nImportance: Ultimate measure of freshness for downstream systems.",
+  consumerLag: "What it is: Events on the topic not yet processed, summed over all subscribers.\nImportance: Shows whether consumers keep up.",
   enrichmentsFailed: "What it is: Number of consumer enrichments that failed.\nImportance: Indicates read-side database errors or lock timeouts."
 };
 
 const DEFAULT_MAIN_ORDER = [
-  'actualRps', 'appLatency', 'queueLatency', 'percentiles', 'cpu', 'io', 
-  'wait_tasks', 'active_locks', 'recordsModified', 'recordsInKafka', 
-  'lag', 'recordsFailed', 'recordsLate', 'slaRate', 'successRate'
+  'actualRps', 'appLatency', 'queueLatency', 'percentiles', 'pipelineLatency', 'cpu', 'io',
+  'wait_tasks', 'active_locks', 'recordsModified', 'recordsInKafka',
+  'lag', 'recordsFailed', 'recordsLate', 'recordsDropped', 'slaRate', 'successRate', 'smtLookup'
 ];
 
 const DEFAULT_SUBSCRIBER_ORDER = [
-  'numSubscribers', 'totalMessagesConsumed', 'consumerEnrichmentLatency', 
-  'percentilesEnrichment', 'consumerE2eLatency', 'enrichmentsFailed'
+  'numSubscribers', 'totalMessagesConsumed', 'consumerEnrichmentLatency',
+  'percentilesEnrichment', 'consumerE2eLatency', 'consumerLag', 'enrichmentsFailed'
 ];
+
+/** Keeps the user's saved card order but adds cards introduced since it was saved. */
+function loadOrder(key: string, defaults: string[]): string[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || 'null');
+    if (Array.isArray(saved)) {
+      const known = saved.filter((id: unknown): id is string => typeof id === 'string' && defaults.includes(id));
+      return [...known, ...defaults.filter(id => !known.includes(id))];
+    }
+  } catch {
+    // fall through to defaults
+  }
+  return defaults;
+}
 
 interface MetricsGridProps {
   currentStats: TelemetryPoint;
   selectedChartMetrics?: Record<string, boolean>;
   toggleChartMetric?: (id: string) => void;
   subscriberStats?: SubscriberStats;
+  approach?: number;
+  pipelineLatency?: LatencySummary;
+  enrichmentMisses?: number;
+  smtLookupAvgMs?: number;
 }
 
 const SortableMetricCard = ({ id, content, title, renderCheckbox, cardStyle }: any) => {
@@ -102,19 +125,15 @@ const SortableMetricCard = ({ id, content, title, renderCheckbox, cardStyle }: a
   );
 };
 
-export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selectedChartMetrics, toggleChartMetric, subscriberStats }) => {
-  const totalRecords = (currentStats.recordsModified || 0) + (currentStats.recordsFailed || 0) + (currentStats.recordsLate || 0);
-  const slaRate = totalRecords > 0 
-    ? ((currentStats.recordsModified / totalRecords) * 100).toFixed(2) 
-    : '100.00';
-  const successRate = totalRecords > 0 
-    ? (((currentStats.recordsModified + currentStats.recordsLate) / totalRecords) * 100).toFixed(2) 
-    : '100.00';
+export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selectedChartMetrics, toggleChartMetric, subscriberStats, approach, pipelineLatency, enrichmentMisses, smtLookupAvgMs }) => {
+  const rates = outcomeRates(currentStats);
+  const slaRate = rates.slaRate.toFixed(2);
+  const successRate = rates.successRate.toFixed(2);
 
   const renderCheckbox = (id: string) => {
     if (!selectedChartMetrics || !toggleChartMetric) return null;
     // Don't render checkbox if it's not a chartable metric (percentiles)
-    if (id === 'percentiles' || id === 'percentilesEnrichment') return null;
+    if (id === 'percentiles' || id === 'percentilesEnrichment' || id === 'smtLookup') return null;
     
     return (
       <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 2 }}>
@@ -134,8 +153,8 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
       content: (
         <>
           <Activity className="stat-icon" style={{ color: 'var(--accent-green)' }} />
-          <div className="stat-value">{currentStats.actualRps || 0}</div>
-          <div className="stat-label">Actual RPS</div>
+          <div className="stat-value">{currentStats.actualRps || 0} <span className="stat-unit">/ {currentStats.targetRps || 0}</span></div>
+          <div className="stat-label">Actual / Target RPS</div>
         </>
       ),
       style: {}
@@ -165,17 +184,37 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
         <>
           <div className="stat-value" style={{ fontSize: '1rem', marginTop: '0.5rem' }}>p95: {currentStats.p95 || 0}ms</div>
           <div className="stat-value" style={{ fontSize: '1rem', marginTop: '0.25rem' }}>p99: {currentStats.p99 || 0}ms</div>
-          <div className="stat-label" style={{ marginTop: '0.5rem' }}>Percentiles</div>
+          <div className="stat-label" style={{ marginTop: '0.5rem' }}>DB Latency Percentiles</div>
         </>
       ),
       style: {}
+    },
+    pipelineLatency: {
+      content: (
+        <>
+          <Timer className="stat-icon" style={{ color: '#f472b6' }} />
+          <div className="stat-value">{pipelineLatency?.avg ?? 0} <span className="stat-unit">ms</span></div>
+          <div className="stat-label">Commit → Topic (p95 {pipelineLatency?.p95 ?? 0}ms)</div>
+        </>
+      ),
+      style: {}
+    },
+    recordsDropped: {
+      content: (
+        <>
+          <Ban className="stat-icon" />
+          <div className="stat-value">{currentStats.recordsDropped || 0}</div>
+          <div className="stat-label">Dropped (shed)</div>
+        </>
+      ),
+      style: { color: (currentStats.recordsDropped || 0) > 0 ? 'var(--accent-red)' : 'inherit' }
     },
     cpu: {
       content: (
         <>
           <Cpu className="stat-icon" />
           <div className="stat-value">{currentStats.cpu} <span className="stat-unit">%</span></div>
-          <div className="stat-label">SQL Server CPU <span style={{ fontSize: '0.75em', opacity: 0.7 }}>(1m)</span></div>
+          <div className="stat-label">SQL Server CPU <span style={{ fontSize: '0.75em', opacity: 0.7 }}>(1m avg)</span></div>
         </>
       ),
       style: {}
@@ -215,7 +254,7 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
         <>
           <Database className="stat-icon" />
           <div className="stat-value">{currentStats.recordsModified}</div>
-          <div className="stat-label">Records Modified</div>
+          <div className="stat-label">Committed On Time</div>
         </>
       ),
       style: {}
@@ -225,7 +264,7 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
         <>
           <Activity className="stat-icon" />
           <div className="stat-value">{currentStats.recordsInKafka}</div>
-          <div className="stat-label">Records in Kafka</div>
+          <div className="stat-label">Events Delivered</div>
         </>
       ),
       style: { color: 'var(--accent-blue)' }
@@ -279,7 +318,19 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
         </>
       ),
       style: { color: parseFloat(successRate as string) < 99 ? 'var(--accent-red)' : 'var(--accent-green)' }
-    }
+    },
+    ...(approach === 4 ? {
+      smtLookup: {
+        content: (
+          <>
+            <Search className="stat-icon" style={{ color: '#a78bfa' }} />
+            <div className="stat-value">{smtLookupAvgMs ?? 0} <span className="stat-unit">ms</span></div>
+            <div className="stat-label">SMT Lookup · {enrichmentMisses ?? 0} misses</div>
+          </>
+        ),
+        style: { color: (enrichmentMisses ?? 0) > 0 ? 'var(--accent-red)' : 'inherit' }
+      }
+    } : {})
   };
 
   const subscriberConfigs: Record<string, any> = subscriberStats ? {
@@ -287,7 +338,7 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
       content: (
         <>
           <Users className="stat-icon" style={{ color: 'var(--accent-blue)' }} />
-          <div className="stat-value">{subscriberStats.numSubscribers}</div>
+          <div className="stat-value">{subscriberStats.readySubscribers ?? subscriberStats.numSubscribers} <span className="stat-unit">/ {subscriberStats.numSubscribers}</span></div>
           <div className="stat-label">Active Subscribers</div>
         </>
       ),
@@ -328,10 +379,20 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
         <>
           <Clock className="stat-icon" style={{ color: '#f472b6' }} />
           <div className="stat-value">{subscriberStats.avgE2eLatency} <span className="stat-unit">ms</span></div>
-          <div className="stat-label">E2E Latency (CDC → Enrich)</div>
+          <div className="stat-label">E2E Latency (Commit → Enriched)</div>
         </>
       ),
       style: {}
+    },
+    consumerLag: {
+      content: (
+        <>
+          <AlertTriangle className="stat-icon" />
+          <div className="stat-value">{subscriberStats.consumerLag.toLocaleString()}</div>
+          <div className="stat-label">Consumer Lag (events)</div>
+        </>
+      ),
+      style: { color: subscriberStats.consumerLag > 1000 ? 'var(--accent-red)' : 'inherit' }
     },
     enrichmentsFailed: {
       content: (
@@ -346,31 +407,8 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ currentStats, selected
   } : {};
 
   // Load saved order from localStorage or fallback to default
-  const [mainOrder, setMainOrder] = useState<string[]>(() => {
-    const saved = localStorage.getItem('metricsGridMainOrder');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length === DEFAULT_MAIN_ORDER.length) {
-          return parsed;
-        }
-      } catch (e) {}
-    }
-    return DEFAULT_MAIN_ORDER;
-  });
-
-  const [subscriberOrder, setSubscriberOrder] = useState<string[]>(() => {
-    const saved = localStorage.getItem('metricsGridSubscriberOrder');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length === DEFAULT_SUBSCRIBER_ORDER.length) {
-          return parsed;
-        }
-      } catch (e) {}
-    }
-    return DEFAULT_SUBSCRIBER_ORDER;
-  });
+  const [mainOrder, setMainOrder] = useState<string[]>(() => loadOrder('metricsGridMainOrder', DEFAULT_MAIN_ORDER));
+  const [subscriberOrder, setSubscriberOrder] = useState<string[]>(() => loadOrder('metricsGridSubscriberOrder', DEFAULT_SUBSCRIBER_ORDER));
 
   useEffect(() => {
     localStorage.setItem('metricsGridMainOrder', JSON.stringify(mainOrder));

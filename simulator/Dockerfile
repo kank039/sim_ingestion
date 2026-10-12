@@ -1,20 +1,16 @@
-FROM node:18-alpine
-
-# Install Docker CLI so the simulator can query `docker stats` of sibling containers, and curl for healthcheck
-RUN apk add --no-cache docker-cli curl
-
+FROM node:22-alpine AS build
 WORKDIR /app
-
-# Copy package info and install dependencies
 COPY package*.json ./
 RUN npm ci
-
-# Copy source code
 COPY tsconfig.json ./
 COPY src/ ./src/
+RUN npm run build && npm prune --omit=dev
 
-# Expose backend API port
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+COPY package*.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
 EXPOSE 3001
-
-# Start the simulator
-CMD ["npm", "start"]
+CMD ["node", "dist/index.js"]

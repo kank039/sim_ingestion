@@ -1,212 +1,180 @@
 import sql from 'mssql';
-import { initSqlBatches } from './initSql';
+import { config } from './config';
+import { createDatabaseSql, schemaBatches, backfillChangeTokensSql, ensureReferenceDataSql } from './schema';
+import { ALL_CDC_TABLES } from './approaches';
 
-const config: sql.config = {
-    user: 'sa',
-    password: 'Password123!',
-    server: process.env.DB_HOST || 'localhost',
-    database: 'sim_db',
-    options: {
-        encrypt: true,
-        trustServerCertificate: true
-    },
-    pool: {
-        max: 2000,
-        min: 1
-    }
-};
-
-let pool: sql.ConnectionPool;
-let lastIOMB = 0;
-let lastIOTime = Date.now();
-
-export async function connectDB() {
-    try {
-        if (pool) await pool.close();
-    } catch(e) {}
-    
-    try {
-        pool = await sql.connect(config);
-        console.log("Connected to SQL Server");
-    } catch (e: any) {
-        if (e.code === 'ELOGIN' || e.message?.includes('Login failed')) {
-            console.warn("Database 'sim_db' might not exist. Attempting to initialize it...");
-            await initializeDatabaseAndConnector();
-            // Retry connecting to sim_db after initialization
-            pool = await sql.connect(config);
-            console.log("Connected to SQL Server after initialization");
-        } else {
-            throw e;
-        }
-    }
-
-    await populateInitialData(pool);
-}
-
-export async function populateInitialData(pool: sql.ConnectionPool) {
-    // Insert some initial data to invoice_batch (ignore errors if other workers are doing it)
-    try {
-        for (let i = 1; i <= 100; i++) {
-            const planId = ((i - 1) % 100) + 1;
-            await pool.request().query(`
-                IF NOT EXISTS (SELECT 1 FROM invoice_batch WHERE id = ${i})
-                BEGIN
-                    INSERT INTO invoice_batch (id, invoice_number, plan_id) VALUES (${i}, 'INV-${1000 + i}', ${planId})
-                END
-            `);
-        }
-        // Ensure plan_id is set for any existing rows (e.g., from earlier init without plan_id)
-        await pool.request().query(`
-            UPDATE invoice_batch SET plan_id = ((id - 1) % 100) + 1 WHERE plan_id IS NULL
-        `);
-    } catch (e) {
-        // ignore
-    }
-}
-
-async function initializeDatabaseAndConnector() {
-    const masterConfig = { ...config, database: undefined }; // Connect to default database (master)
-    let tempPool: sql.ConnectionPool | null = null;
-    try {
-        tempPool = await sql.connect(masterConfig);
-        console.log("Connected to master DB. Creating sim_db...");
-        
-        try {
-            await tempPool.request().query(initSqlBatches[0]); // CREATE DATABASE
-        } catch (e: any) {
-            console.log("Database creation skipped or failed:", e.message);
-        }
-
-        await tempPool.close();
-        
-        // Reconnect directly to sim_db to run the rest of the scripts
-        tempPool = await sql.connect(config);
-        console.log("Connected to sim_db. Running initialization scripts...");
-
-        for (let i = 1; i < initSqlBatches.length; i++) {
-            const batch = initSqlBatches[i].trim();
-            if (batch === 'USE sim_db;') continue;
-            try {
-                await tempPool.request().query(batch);
-            } catch (err: any) {
-                console.error("Error executing SQL batch:", err.message);
-            }
-        }
-        console.log("Database initialized successfully.");
-    } catch (err) {
-        console.error("Failed to initialize database:", err);
-        throw err;
-    } finally {
-        if (tempPool) {
-            await tempPool.close();
-        }
-    }
-
-    console.log("Registering Debezium connector...");
-    const debeziumConfig = {
-        name: "billing_record_connector",
-        config: {
-            "connector.class": "io.debezium.connector.sqlserver.SqlServerConnector",
-            "database.hostname": "sqlserver",
-            "database.port": "1433",
-            "database.user": "sa",
-            "database.password": "Password123!",
-            "database.names": "sim_db",
-            "topic.prefix": "sim",
-            "table.include.list": "dbo.billing_record,dbo.invoice_batch,dbo.cdc_events_shadow,dbo.outbox_events",
-            "database.encrypt": "false",
-            "schema.history.internal.kafka.bootstrap.servers": "kafka:29092",
-            "schema.history.internal.kafka.topic": "schema-changes.billing.reset"
-        }
+export function dbConfig(overrides: Partial<sql.config> = {}, poolMax = 10): sql.config {
+    return {
+        user: config.db.user,
+        password: config.db.password,
+        server: config.db.host,
+        port: config.db.port,
+        database: config.db.database,
+        options: { encrypt: true, trustServerCertificate: true },
+        pool: { max: poolMax, min: 0, idleTimeoutMillis: 30_000 },
+        requestTimeout: 30_000,
+        ...overrides,
     };
-
-    try {
-        // First delete it if it exists (ignore errors if it doesn't)
-        await fetch("http://debezium:8083/connectors/billing_record_connector", { method: "DELETE" }).catch(() => {});
-        
-        // Then register it
-        const res = await fetch("http://debezium:8083/connectors", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(debeziumConfig)
-        });
-        
-        if (!res.ok) {
-            const text = await res.text();
-            console.error("Failed to register Debezium connector:", text);
-        } else {
-            console.log("Debezium connector registered successfully.");
-        }
-    } catch (err) {
-        console.error("Failed to communicate with Debezium:", err);
-    }
 }
 
-export function getPool() {
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Opens a dedicated pool (never the mssql global pool, so threads/modules don't close each
+ * other's connections), retrying until SQL Server is reachable.
+ */
+export async function openPool(poolMax: number, opts: { retries?: number; label?: string; overrides?: Partial<sql.config> } = {}): Promise<sql.ConnectionPool> {
+    const retries = opts.retries ?? 60;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        const pool = new sql.ConnectionPool(dbConfig(opts.overrides, poolMax));
+        try {
+            await pool.connect();
+            return pool;
+        } catch (e) {
+            lastErr = e;
+            try { await pool.close(); } catch { /* ignore */ }
+            if (attempt < retries) await sleep(2000);
+        }
+    }
+    throw new Error(`${opts.label || 'DB'} connection failed after ${retries + 1} attempts: ${String((lastErr as Error)?.message || lastErr)}`);
+}
+
+/** Creates the database and applies the idempotent schema. Main thread only. */
+export async function initializeDatabase(log: (msg: string) => void): Promise<sql.ConnectionPool> {
+    const master = await openPool(1, { label: 'SQL Server (master)', overrides: { database: 'master' } });
+    try {
+        await master.request().query(createDatabaseSql(config.db.database));
+    } finally {
+        await master.close();
+    }
+
+    const pool = await openPool(20, { label: 'SQL Server' });
+    for (const batch of schemaBatches) {
+        await pool.request().query(batch.sql);
+    }
+    log('Database schema verified.');
     return pool;
 }
 
-export async function getDBStats() {
-    if (!pool) return { cpu: 0, io: 0 };
-    
-    // Simplistic CPU polling from dm_os_ring_buffers
-    const cpuQuery = `
-        SELECT TOP 1 
-            record.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') as SystemIdle,
-            record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') as SQLProcessUtilization 
-        FROM (
-            SELECT CAST(record AS XML) AS record 
-            FROM sys.dm_os_ring_buffers 
-            WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR' 
-            AND record LIKE '%<SystemHealth>%'
-        ) AS x 
-        ORDER BY record.value('(./Record/@id)[1]', 'int') DESC;
-    `;
-    
-    // Simplistic IO polling
-    const ioQuery = `
-        SELECT SUM(num_of_bytes_read + num_of_bytes_written) / 1024 / 1024 as TotalIOMB
-        FROM sys.dm_io_virtual_file_stats(DB_ID('sim_db'), NULL);
-    `;
+/** mssql supports per-request timeout overrides at runtime, but its typings don't expose them. */
+function longRequest(pool: sql.ConnectionPool, requestTimeout: number): sql.Request {
+    return (pool as any).request({ requestTimeout }) as sql.Request;
+}
 
-    try {
-        const cpuRes = await pool.request().query(cpuQuery);
-        const ioRes = await pool.request().query(ioQuery);
-        
-        const waitRes = await pool.request().query(`SELECT count(*) as WaitTasks FROM sys.dm_os_waiting_tasks WHERE session_id > 50;`);
-        const lockRes = await pool.request().query(`SELECT count(*) as ActiveLocks FROM sys.dm_tran_locks WHERE request_session_id > 50 AND request_mode IN ('X', 'U', 'IX');`);
-        const ldfRes = await pool.request().query(`SELECT (used_log_space_in_bytes / 1024.0 / 1024.0) as LdfSizeMB FROM sys.dm_db_log_space_usage;`);
-        const pleRes = await pool.request().query(`SELECT cntr_value as PLE FROM sys.dm_os_performance_counters WHERE counter_name = 'Page life expectancy' AND object_name LIKE '%Buffer Manager%';`);
-        const tempdbRes = await pool.request().query(`SELECT SUM(unallocated_extent_page_count + version_store_reserved_page_count + user_object_reserved_page_count + internal_object_reserved_page_count + mixed_extent_page_count) * 8.0 / 1024.0 as TempDbMB FROM tempdb.sys.dm_db_file_space_usage;`);
-        const connRes = await pool.request().query(`SELECT count(*) as ActiveConnections FROM sys.dm_exec_sessions WHERE database_id = DB_ID('sim_db') AND session_id > 50;`);
+export async function backfillChangeTokens(pool: sql.ConnectionPool) {
+    await longRequest(pool, 600_000).query(backfillChangeTokensSql);
+}
 
-        const currentIOMB = ioRes.recordset[0]?.TotalIOMB || 0;
-        const now = Date.now();
-        
-        let deltaMB = 0;
-        if (lastIOMB > 0 && currentIOMB >= lastIOMB) {
-            const elapsedSec = (now - lastIOTime) / 1000;
-            if (elapsedSec > 0) {
-                deltaMB = (currentIOMB - lastIOMB) / elapsedSec;
-            }
+export async function ensureReferenceData(pool: sql.ConnectionPool, cardinality: number) {
+    const req = longRequest(pool, 900_000);
+    req.input('n', sql.Int, cardinality);
+    await req.query(ensureReferenceDataSql);
+}
+
+export async function getCdcTrackedTables(pool: sql.ConnectionPool): Promise<string[]> {
+    const res = await pool.request().query(`SELECT name FROM sys.tables WHERE is_tracked_by_cdc = 1`);
+    return res.recordset.map((r: any) => r.name);
+}
+
+/** Enables CDC on exactly `wanted` (among the simulator's tables) and disables it everywhere else. */
+export async function setCdcTables(pool: sql.ConnectionPool, wanted: string[], log: (msg: string) => void) {
+    const tracked = new Set(await getCdcTrackedTables(pool));
+    for (const table of ALL_CDC_TABLES) {
+        if (tracked.has(table) && !wanted.includes(table)) {
+            await pool.request().query(`EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'${table}', @capture_instance = N'all';`);
+            log(`CDC disabled on dbo.${table}`);
         }
-        
-        lastIOMB = currentIOMB;
-        lastIOTime = now;
-
-        return {
-            cpu: cpuRes.recordset[0]?.SQLProcessUtilization || 0,
-            io: Math.round(deltaMB * 100) / 100, // rounded to 2 decimals
-            wait_tasks: waitRes.recordset[0]?.WaitTasks || 0,
-            active_locks: lockRes.recordset[0]?.ActiveLocks || 0,
-            ldfSizeMB: Math.round((ldfRes.recordset[0]?.LdfSizeMB || 0) * 100) / 100,
-            ple: pleRes.recordset[0]?.PLE || 0,
-            tempDbMB: Math.round((tempdbRes.recordset[0]?.TempDbMB || 0) * 100) / 100,
-            activeConnections: connRes.recordset[0]?.ActiveConnections || 0
-        };
-    } catch (e: any) {
-        require('fs').appendFileSync('d:\\tmp\\db_error.log', new Date().toISOString() + ': ' + e.message + '\n' + (e.stack || '') + '\n');
-        console.error("Failed to get DB stats", e);
-        return { cpu: 0, io: 0, wait_tasks: 0, active_locks: 0, ldfSizeMB: 0, ple: 0, tempDbMB: 0, activeConnections: 0 };
     }
+    for (const table of wanted) {
+        if (!tracked.has(table)) {
+            await pool.request().query(`EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'${table}', @role_name = NULL, @supports_net_changes = 0;`);
+            log(`CDC enabled on dbo.${table}`);
+        }
+    }
+}
+
+export async function setTriggerEnabled(pool: sql.ConnectionPool, enabled: boolean) {
+    await pool.request().query(`${enabled ? 'ENABLE' : 'DISABLE'} TRIGGER trg_billing_record_cdc ON dbo.billing_record;`);
+}
+
+export async function isTriggerEnabled(pool: sql.ConnectionPool): Promise<boolean> {
+    const res = await pool.request().query(`SELECT is_disabled FROM sys.triggers WHERE name = 'trg_billing_record_cdc'`);
+    return res.recordset.length > 0 && !res.recordset[0].is_disabled;
+}
+
+/** TRUNCATE is rejected on CDC-enabled tables, so callers disable CDC on these tables first. */
+export async function truncateTables(pool: sql.ConnectionPool, tables: string[]) {
+    for (const t of tables) {
+        await pool.request().query(`TRUNCATE TABLE dbo.${t};`);
+    }
+}
+
+/** Makes sure the CDC capture job is running (it can be stopped after an agent restart). */
+export async function startCdcCaptureJob(pool: sql.ConnectionPool) {
+    try {
+        await pool.request().query(`EXEC sys.sp_cdc_start_job @job_type = N'capture';`);
+    } catch {
+        // Already running: SQL Server raises an error, which is fine.
+    }
+}
+
+let lastIO: { mb: number; at: number } | null = null;
+
+const DB_STATS_SQL = `
+SET NOCOUNT ON;
+SELECT TOP 1
+    record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') AS SQLProcessUtilization
+FROM (
+    SELECT CAST(record AS XML) AS record
+    FROM sys.dm_os_ring_buffers
+    WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR' AND record LIKE '%<SystemHealth>%'
+) AS x
+ORDER BY record.value('(./Record/@id)[1]', 'int') DESC;
+SELECT SUM(num_of_bytes_read + num_of_bytes_written) / 1024.0 / 1024.0 AS TotalIOMB FROM sys.dm_io_virtual_file_stats(DB_ID(), NULL);
+SELECT COUNT(*) AS WaitTasks FROM sys.dm_os_waiting_tasks WHERE session_id > 50;
+SELECT COUNT(*) AS ActiveLocks FROM sys.dm_tran_locks WHERE request_session_id > 50 AND request_mode IN ('X', 'U', 'IX');
+SELECT used_log_space_in_bytes / 1024.0 / 1024.0 AS LdfSizeMB FROM sys.dm_db_log_space_usage;
+SELECT cntr_value AS PLE FROM sys.dm_os_performance_counters WHERE counter_name = 'Page life expectancy' AND object_name LIKE '%Buffer Manager%';
+SELECT SUM(version_store_reserved_page_count + user_object_reserved_page_count + internal_object_reserved_page_count + mixed_extent_page_count) * 8.0 / 1024.0 AS TempDbMB FROM tempdb.sys.dm_db_file_space_usage;
+SELECT COUNT(*) AS ActiveConnections FROM sys.dm_exec_sessions WHERE database_id = DB_ID() AND session_id > 50;`;
+
+export interface DbStats {
+    cpu: number;
+    io: number;
+    wait_tasks: number;
+    active_locks: number;
+    ldfSizeMB: number;
+    ple: number;
+    tempDbMB: number;
+    activeConnections: number;
+}
+
+export const EMPTY_DB_STATS: DbStats = { cpu: 0, io: 0, wait_tasks: 0, active_locks: 0, ldfSizeMB: 0, ple: 0, tempDbMB: 0, activeConnections: 0 };
+
+/** All DMV reads in one round trip. Throws on failure; the telemetry loop decides what to keep. */
+export async function getDBStats(pool: sql.ConnectionPool): Promise<DbStats> {
+    const res = await pool.request().query(DB_STATS_SQL);
+    const sets = res.recordsets as any[];
+    const first = (i: number, col: string) => Number(sets[i]?.[0]?.[col] ?? 0) || 0;
+
+    const ioMB = first(1, 'TotalIOMB');
+    const now = Date.now();
+    let ioRate = 0;
+    if (lastIO && ioMB >= lastIO.mb && now > lastIO.at) {
+        ioRate = (ioMB - lastIO.mb) / ((now - lastIO.at) / 1000);
+    }
+    lastIO = { mb: ioMB, at: now };
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    return {
+        cpu: first(0, 'SQLProcessUtilization'),
+        io: round2(ioRate),
+        wait_tasks: first(2, 'WaitTasks'),
+        active_locks: first(3, 'ActiveLocks'),
+        ldfSizeMB: round2(first(4, 'LdfSizeMB')),
+        ple: first(5, 'PLE'),
+        tempDbMB: round2(first(6, 'TempDbMB')),
+        activeConnections: first(7, 'ActiveConnections'),
+    };
 }
